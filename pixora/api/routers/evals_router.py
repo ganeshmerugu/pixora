@@ -92,3 +92,66 @@ async def get_report(report_id: str):
 @router.get("/drift")
 async def get_drift_reports():
     return _drift_reports
+
+
+@router.post("/benchmark")
+async def run_golden_benchmark():
+    """Run the 100-case golden benchmark suite with the regex extractor and return real metrics."""
+    from collections import defaultdict
+    try:
+        from pixora.evals.benchmarks.golden_data import GOLDEN_BENCHMARKS
+        from pixora.evals.runner import EvalRunner
+        from pixora.api.routers.parse import _dynamic_extract, _post_process_extraction
+
+        predictions = {}
+        for case in GOLDEN_BENCHMARKS:
+            text = case.get("text", "")
+            pred = _dynamic_extract(text)
+            predictions[case["document_id"]] = _post_process_extraction(pred)
+
+        runner = EvalRunner(threshold=0.80)
+        report = runner.run_suite(predictions, GOLDEN_BENCHMARKS, suite_name="golden_100")
+
+        by_type: dict[str, dict] = defaultdict(lambda: {"f1": [], "scores": [], "passed": 0, "total": 0})
+        for case, res in zip(GOLDEN_BENCHMARKS, report["results"]):
+            dt = case.get("doc_type", "?")
+            by_type[dt]["f1"].append(res["metrics"]["f1"])
+            by_type[dt]["scores"].append(res["score"]["weighted_score"])
+            by_type[dt]["total"] += 1
+            if res["score"]["passed"]:
+                by_type[dt]["passed"] += 1
+
+        result = {
+            "suite": report["suite_name"],
+            "total": report["total_cases"],
+            "passed": report["passed"],
+            "failed": report["failed"],
+            "pass_rate": round(report["pass_rate"] * 100, 1),
+            "avg_f1": round(report["avg_f1"] * 100, 1),
+            "avg_score": round(report["avg_score"] * 100, 1),
+            "by_type": {
+                dt: {
+                    "f1": round(sum(d["f1"]) / len(d["f1"]) * 100, 1),
+                    "score": round(sum(d["scores"]) / len(d["scores"]) * 100, 1),
+                    "pass_rate": round(d["passed"] / d["total"] * 100, 1),
+                    "passed": d["passed"],
+                    "total": d["total"],
+                }
+                for dt, d in sorted(by_type.items())
+            },
+            "engine": "regex",
+            "status": "completed",
+        }
+
+        report_id = uuid.uuid4().hex[:16]
+        _reports[report_id] = {
+            "id": report_id, "suite_name": "golden_100",
+            "total_cases": result["total"], "passed": result["passed"],
+            "failed": result["failed"], "pass_rate": result["pass_rate"] / 100,
+            "avg_f1": result["avg_f1"] / 100, "avg_quality": result["avg_score"] / 100,
+            "status": "completed", "by_doc_type": result["by_type"], "failures": [],
+        }
+
+        return result
+    except Exception as e:
+        return {"error": str(e), "status": "failed"}
