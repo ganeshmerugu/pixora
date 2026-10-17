@@ -479,50 +479,65 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
         if printable / max(len(all_content), 1) < 0.6:
             has_text = False
 
-    # If reader succeeded but flagged needs_ocr or no text layer, run OCR
+    # If no text layer — use VLM-first architecture (don't waste time on OCR)
     is_image_format = doc_tree is not None and (
         doc_tree.get("text_layer_present") is False
         or any(r.get("metadata", {}).get("needs_ocr") for p in doc_tree.get("pages", []) for r in p.get("regions", []))
     )
 
+    vlm_result = None
     if not has_text and is_image_format:
-        ocr_text = await _run_ocr(file_bytes, filename)
-        if ocr_text and ocr_text.strip():
-            doc_tree = DocumentTree(
-                document_id=doc_id,
-                pages=[Page(page_number=1, regions=[
-                    Region(id="r_ocr_0", type="TEXT", content=ocr_text, confidence=0.85),
-                ])],
-                source_format="ocr",
-                text_layer_present=True,
-            )
-            has_text = True
-        else:
-            # OCR failed — try VLM on raw image before giving up
-            try:
-                from pixora.ocr.smart_pipeline import vlm_extract
-                vlm_text, vlm_cost = await vlm_extract(file_bytes)
+        # Strategy 1: VLM-first (Gemini free, best quality for images)
+        try:
+            from pixora.ocr.vlm_harness import vlm_extract as vlm_harness_extract, is_vlm_available
+            if is_vlm_available():
+                t0 = time.monotonic()
+                vlm_result = await vlm_harness_extract(file_bytes, filename, doc_type=doc_type)
+                vlm_md = vlm_result.get("markdown", "")
+                vlm_ext = vlm_result.get("extraction", {})
+                vlm_text = vlm_md or " ".join(str(v) for v in vlm_ext.values() if v)
+
                 if vlm_text and vlm_text.strip():
                     doc_tree = DocumentTree(
                         document_id=doc_id,
                         pages=[Page(page_number=1, regions=[
-                            Region(id="r_vlm_0", type="TEXT", content=vlm_text, confidence=0.85),
+                            Region(id="r_vlm_0", type="TEXT", content=vlm_text, confidence=vlm_result.get("confidence", 0.85)),
                         ])],
                         source_format="vlm",
                         text_layer_present=True,
                     )
                     has_text = True
-                    auditor.log_stage("vlm_ocr_fallback", detail=f"len={len(vlm_text)}, cost=${vlm_cost:.4f}")
-            except Exception:
-                pass
+                    auditor.log_stage("vlm_primary", detail=(
+                        f"provider={vlm_result.get('provider', '?')}, "
+                        f"fields={len(vlm_ext)}, "
+                        f"confidence={vlm_result.get('confidence', 0):.2f}, "
+                        f"cost=${vlm_result.get('cost_usd', 0):.4f}, "
+                        f"cached={vlm_result.get('cached', False)}"
+                    ), duration_ms=int((time.monotonic() - t0) * 1000))
+        except Exception as exc:
+            logger.warning("parse: VLM primary failed: %s", exc)
 
-            if not has_text:
-                ext = os.path.splitext(filename)[1].lower()
-                raise ValueError(
-                    f"Could not extract text from this {ext.upper().lstrip('.')} file. "
-                    f"The image may be blank, too low quality, or in an unsupported script. "
-                    f"Set PIXORA_GEMINI_API_KEY for free VLM-based extraction."
+        # Strategy 2: OCR fallback (free, for when VLM is unavailable)
+        if not has_text:
+            ocr_text = await _run_ocr(file_bytes, filename)
+            if ocr_text and ocr_text.strip():
+                doc_tree = DocumentTree(
+                    document_id=doc_id,
+                    pages=[Page(page_number=1, regions=[
+                        Region(id="r_ocr_0", type="TEXT", content=ocr_text, confidence=0.75),
+                    ])],
+                    source_format="ocr",
+                    text_layer_present=True,
                 )
+                has_text = True
+                auditor.log_stage("ocr_fallback", detail=f"len={len(ocr_text)}")
+
+        if not has_text:
+            ext = os.path.splitext(filename)[1].lower()
+            raise ValueError(
+                f"Could not extract text from this {ext.upper().lstrip('.')} file. "
+                f"Set PIXORA_GEMINI_API_KEY (free) for VLM-based extraction."
+            )
 
     if not has_text:
         text = file_bytes.decode("utf-8", errors="replace")[:50000]
@@ -586,7 +601,24 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
     heal_round = 0
     engine_used = "regex"
 
-    for heal_round in range(MAX_HEAL_ROUNDS):
+    # If VLM already extracted structured data, use it directly (skip redundant re-extraction)
+    if vlm_result and vlm_result.get("extraction") and any(k for k in vlm_result["extraction"] if not k.startswith("_")):
+        extraction_result = vlm_result["extraction"]
+        extraction_result = _post_process_extraction(extraction_result)
+        engine_used = f"vlm_{vlm_result.get('provider', 'unknown')}"
+        if vlm_result.get("markdown"):
+            extraction_result["_markdown"] = vlm_result["markdown"]
+        if vlm_result.get("tables"):
+            extraction_result["_tables"] = vlm_result["tables"]
+        auditor.log_stage("extractor_round_0", detail=f"tier={tier}, engine={engine_used}, fields={len(extraction_result)}, vlm_passthrough=true", duration_ms=0)
+        state["extraction_result"] = extraction_result
+        state["extraction_schema"] = {
+            "schema_id": "dynamic", "doc_type": doc_type, "version": "1.0",
+            "nodes": [{"name": k, "field_type": "STRING"} for k in extraction_result if not k.startswith("_")],
+        }
+    else:
+
+      for heal_round in range(MAX_HEAL_ROUNDS):
         t0 = time.monotonic()
         extraction_result, engine_used = await _smart_tier_extract(file_bytes, filename, all_text, tier)
         extraction_result = _post_process_extraction(extraction_result)
