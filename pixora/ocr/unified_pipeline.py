@@ -125,31 +125,64 @@ async def process_document(
     from pixora.ocr.smart_pipeline import estimate_text_quality
     ocr_quality = estimate_text_quality(ocr_text) if ocr_text else 0.0
 
-    # Step 4: Decide — OCR good enough, or need VLM?
-    if ocr_quality >= 0.6 and not enable_vlm:
+    # Step 4: JEV DECISION 1 — Should we escalate to VLM?
+    # Replaces hardcoded "if ocr_quality >= 0.6"
+    try:
+        from pixora.ocr.jev_decisions import should_escalate_to_vlm, is_available as jev_available
+        if jev_available():
+            should_escalate, escalation_conf = await should_escalate_to_vlm(ocr_text)
+            logger.info("unified: Jev escalation decision: escalate=%s conf=%.2f", should_escalate, escalation_conf)
+        else:
+            should_escalate = ocr_quality < 0.6
+            escalation_conf = 1.0 - ocr_quality
+    except Exception:
+        should_escalate = ocr_quality < 0.6
+        escalation_conf = 1.0 - ocr_quality
+
+    if not should_escalate and not enable_vlm:
         return UnifiedResult(
             text=ocr_text, markdown=ocr_text, method="ocr_only",
             ocr_text=ocr_text, ocr_confidence=ocr_quality, ocr_words=ocr_words,
             final_confidence=ocr_quality, cost_usd=0.0,
             latency_ms=round((time.monotonic() - start) * 1000, 1),
             engines_used=engines_used, preprocessing=preproc_applied,
-            quality_scores={"ocr_quality": ocr_quality},
+            quality_scores={"ocr_quality": ocr_quality, "jev_escalation_conf": escalation_conf},
         )
 
-    # Step 5: VLM extraction (on original image, not preprocessed — VLM handles its own preprocessing)
+    # Step 5: VLM extraction (OCR-grounded — feeds OCR text as anchor)
     vlm_result = await _vlm_enrich(file_bytes, filename, doc_type, ocr_text)
 
     if vlm_result and vlm_result.get("extraction"):
         total_cost += vlm_result.get("cost_usd", 0)
         engines_used.append(f"vlm_{vlm_result.get('provider', '?')}")
+        vlm_extraction = vlm_result["extraction"]
 
-        # Step 6: Merge OCR + VLM
+        # Step 6: JEV DECISION 2 — Verify each field is grounded in OCR
+        # Catches VLM hallucinations by cross-checking against OCR text
+        grounding_results = {}
+        if ocr_text:
+            try:
+                from pixora.ocr.jev_decisions import verify_extraction_grounded
+                grounding_results = await verify_extraction_grounded(ocr_text, vlm_extraction)
+                hallucinated = [k for k, v in grounding_results.items() if not v.get("grounded", True)]
+                if hallucinated:
+                    logger.warning("unified: Jev flagged %d potentially hallucinated fields: %s", len(hallucinated), hallucinated)
+                    for field in hallucinated:
+                        vlm_extraction[f"_{field}_grounding"] = grounding_results[field]
+            except Exception:
+                pass
+
+        vlm_result["extraction"] = vlm_extraction
+
+        # Step 7: Merge OCR + VLM
         merged = _merge_ocr_vlm(ocr_text, ocr_quality, vlm_result)
         merged["ocr_words"] = ocr_words
         merged["preprocessing"] = preproc_applied
         merged["latency_ms"] = round((time.monotonic() - start) * 1000, 1)
         merged["engines_used"] = engines_used
         merged["cost_usd"] = total_cost
+        if grounding_results:
+            merged["quality_scores"]["grounding"] = grounding_results
         return merged
 
     # Step 7: VLM unavailable — return OCR result

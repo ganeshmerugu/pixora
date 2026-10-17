@@ -805,22 +805,21 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
                     })
             p["text_spans"] = spans
 
-    # Map fields to bboxes: Jev (pixel-accurate) → algorithmic fallback
+    # ── JEV DECISION 5: Locate fields in image (Box) ────────────
     pw = pages[0].get("width", 0) if pages else 0
     ph = pages[0].get("height", 0) if pages else 0
     field_bboxes = []
 
-    # Strategy 1: Jev Box (calibrated, pixel-accurate)
     try:
-        from pixora.providers.jev_provider import locate_all_fields, is_jev_available
-        if is_jev_available() and file_bytes:
-            field_bboxes = await locate_all_fields(file_bytes, extraction, pw, ph)
+        from pixora.ocr.jev_decisions import locate_fields_in_image, is_available as jev_available
+        if jev_available() and file_bytes and pw > 0:
+            field_bboxes = await locate_fields_in_image(file_bytes, extraction, pw, ph)
             if field_bboxes:
-                auditor.log_stage("jev_bbox", detail=f"located={len(field_bboxes)} fields via Jev Box")
-    except Exception as exc:
-        logger.debug("parse: Jev bbox failed: %s", exc)
+                auditor.log_stage("jev_bbox", detail=f"located={len(field_bboxes)} via Jev Box")
+    except Exception:
+        pass
 
-    # Strategy 2: Algorithmic (Levenshtein + spatial + label anchoring)
+    # Fallback: algorithmic bbox mapping
     if not field_bboxes:
         try:
             from pixora.ocr.bbox_mapper import map_fields_to_bboxes
@@ -828,7 +827,6 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
         except Exception:
             pass
 
-    # Strategy 3: Legacy fallback
     if not field_bboxes:
         field_bboxes = compute_field_bboxes(extraction, pages, ocr_words)
 
