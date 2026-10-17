@@ -498,11 +498,31 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
             )
             has_text = True
         else:
-            ext = os.path.splitext(filename)[1].lower()
-            raise ValueError(
-                f"OCR could not extract readable text from this {ext.upper().lstrip('.')} file. "
-                f"The image may be blank, too low quality, or in an unsupported script."
-            )
+            # OCR failed — try VLM on raw image before giving up
+            try:
+                from pixora.ocr.smart_pipeline import vlm_extract
+                vlm_text, vlm_cost = await vlm_extract(file_bytes)
+                if vlm_text and vlm_text.strip():
+                    doc_tree = DocumentTree(
+                        document_id=doc_id,
+                        pages=[Page(page_number=1, regions=[
+                            Region(id="r_vlm_0", type="TEXT", content=vlm_text, confidence=0.85),
+                        ])],
+                        source_format="vlm",
+                        text_layer_present=True,
+                    )
+                    has_text = True
+                    auditor.log_stage("vlm_ocr_fallback", detail=f"len={len(vlm_text)}, cost=${vlm_cost:.4f}")
+            except Exception:
+                pass
+
+            if not has_text:
+                ext = os.path.splitext(filename)[1].lower()
+                raise ValueError(
+                    f"Could not extract text from this {ext.upper().lstrip('.')} file. "
+                    f"The image may be blank, too low quality, or in an unsupported script. "
+                    f"Set PIXORA_GEMINI_API_KEY for free VLM-based extraction."
+                )
 
     if not has_text:
         text = file_bytes.decode("utf-8", errors="replace")[:50000]
@@ -822,18 +842,19 @@ def _detect_languages(file_bytes: bytes) -> list[str]:
 
 
 async def _run_ocr(file_bytes: bytes, filename: str) -> str:
-    """Run PaddleOCR (primary) or EasyOCR (fallback) on image bytes."""
+    """Run PaddleOCR (primary) or EasyOCR (fallback) on image bytes.
+    Converts any image format (WEBP, HEIC, AVIF, etc.) to PNG first."""
     from PIL import Image
     import io
 
     try:
         img = Image.open(io.BytesIO(file_bytes))
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
+        img = img.convert("RGB")
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         png_bytes = buf.getvalue()
-    except Exception:
+    except Exception as exc:
+        logger.warning("_run_ocr: image conversion failed: %s", exc)
         png_bytes = file_bytes
 
     languages = _detect_languages(file_bytes)
