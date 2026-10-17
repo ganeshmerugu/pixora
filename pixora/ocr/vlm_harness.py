@@ -55,8 +55,8 @@ class VLMResult(TypedDict, total=False):
 
 # ── Configuration ─────────────────────────────────────────────
 
-MAX_RETRIES = 2
-RETRY_DELAY_S = 1.0
+MAX_RETRIES = 1
+RETRY_DELAY_S = 0.5
 CACHE_MAX_SIZE = 200
 IMAGE_MAX_DIMENSION = 2048
 CONFIDENCE_THRESHOLD_HIGH = 0.85
@@ -441,7 +441,7 @@ async def _call_with_retry(
     for attempt in range(MAX_RETRIES + 1):
         content, cost = await _call_vlm(provider, provider_name, image_bytes, prompt)
         if content == "__RATE_LIMITED__":
-            wait = (attempt + 1) * 5
+            wait = (attempt + 1) * 2
             logger.info("vlm_harness: 429 rate limited, waiting %ds (attempt %d)", wait, attempt + 1)
             await asyncio.sleep(wait)
             continue
