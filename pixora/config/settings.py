@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     enable_tier_escalation: bool = True
 
     # AI Provider keys
+    typesafe_api_key: str = ""
     gemini_api_key: str = ""
     groq_api_key: str = ""
     together_api_key: str = ""

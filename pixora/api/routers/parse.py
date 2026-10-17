@@ -809,14 +809,30 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
                     })
             p["text_spans"] = spans
 
-    # Map VLM fields to OCR word positions (fuzzy matching)
+    # Map fields to bboxes: Jev (pixel-accurate) → algorithmic fallback
+    pw = pages[0].get("width", 0) if pages else 0
+    ph = pages[0].get("height", 0) if pages else 0
+    field_bboxes = []
+
+    # Strategy 1: Jev Box (calibrated, pixel-accurate)
     try:
-        from pixora.ocr.bbox_mapper import map_fields_to_bboxes
-        pw = pages[0].get("width", 0) if pages else 0
-        ph = pages[0].get("height", 0) if pages else 0
-        field_bboxes = map_fields_to_bboxes(extraction, ocr_words or [], pw, ph)
-    except Exception:
-        field_bboxes = []
+        from pixora.providers.jev_provider import locate_all_fields, is_jev_available
+        if is_jev_available() and file_bytes:
+            field_bboxes = await locate_all_fields(file_bytes, extraction, pw, ph)
+            if field_bboxes:
+                auditor.log_stage("jev_bbox", detail=f"located={len(field_bboxes)} fields via Jev Box")
+    except Exception as exc:
+        logger.debug("parse: Jev bbox failed: %s", exc)
+
+    # Strategy 2: Algorithmic (Levenshtein + spatial + label anchoring)
+    if not field_bboxes:
+        try:
+            from pixora.ocr.bbox_mapper import map_fields_to_bboxes
+            field_bboxes = map_fields_to_bboxes(extraction, ocr_words or [], pw, ph)
+        except Exception:
+            pass
+
+    # Strategy 3: Legacy fallback
     if not field_bboxes:
         field_bboxes = compute_field_bboxes(extraction, pages, ocr_words)
 
