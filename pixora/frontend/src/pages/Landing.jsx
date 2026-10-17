@@ -136,8 +136,13 @@ export default function Landing() {
       const fd = new FormData()
       fd.append('file', file)
       fd.append('tier', 'agentic')
-      const res = await fetch('/api/v1/parse', { method: 'POST', body: fd })
-      const data = await res.json()
+      const token = localStorage.getItem('pixora_token')
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {}
+      const res = await fetch('/api/v1/parse/upload', { method: 'POST', body: fd, headers })
+      const text = await res.text()
+      let data
+      try { data = JSON.parse(text) } catch { data = { error: res.ok ? text : `Server error (${res.status}): ${text.slice(0, 100)}` } }
+      if (!res.ok && !data.error) data = { error: data.detail || `Request failed (${res.status})` }
       setDemoResult(data)
     } catch (err) {
       setDemoResult({ error: err.message })
