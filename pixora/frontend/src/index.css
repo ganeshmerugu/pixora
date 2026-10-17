@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #09090b;
+  --bg-secondary: #18181b;
+  --bg-tertiary: #27272a;
+  --bg-hover: #3f3f46;
+  --border: #27272a;
+  --border-hover: #3f3f46;
+  --text-primary: #e4e4e7;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-inverted: #09090b;
+  --accent: #818cf8;
+  --accent-bg: rgba(99, 102, 241, 0.1);
+  --accent-border: rgba(99, 102, 241, 0.2);
+  --success: #34d399;
+  --error: #f87171;
+  --card-bg: rgba(24, 24, 27, 0.5);
+}
+
+.light {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f4f4f5;
+  --bg-tertiary: #e4e4e7;
+  --bg-hover: #d4d4d8;
+  --border: #e4e4e7;
+  --border-hover: #d4d4d8;
+  --text-primary: #18181b;
+  --text-secondary: #52525b;
+  --text-muted: #a1a1aa;
+  --text-inverted: #ffffff;
+  --accent: #6366f1;
+  --accent-bg: rgba(99, 102, 241, 0.08);
+  --accent-border: rgba(99, 102, 241, 0.2);
+  --success: #10b981;
+  --error: #ef4444;
+  --card-bg: rgba(244, 244, 245, 0.8);
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* Theme-aware utility overrides */
+.light .bg-zinc-950 { background-color: var(--bg-primary); }
+.light .bg-zinc-900 { background-color: var(--bg-secondary); }
+.light .bg-zinc-900\/50 { background-color: var(--card-bg); }
+.light .bg-zinc-900\/80 { background-color: rgba(244, 244, 245, 0.9); }
+.light .bg-zinc-800 { background-color: var(--bg-tertiary); }
+.light .bg-zinc-950\/80 { background-color: rgba(255, 255, 255, 0.9); }
+
+.light .text-zinc-200 { color: var(--text-primary); }
+.light .text-zinc-300 { color: #3f3f46; }
+.light .text-zinc-400 { color: var(--text-secondary); }
+.light .text-zinc-500 { color: var(--text-muted); }
+.light .text-zinc-600 { color: #a1a1aa; }
+.light .text-zinc-100 { color: var(--text-primary); }
+
+.light .border-zinc-800 { border-color: var(--border); }
+.light .border-zinc-800\/50 { border-color: rgba(228, 228, 231, 0.5); }
+.light .border-zinc-700 { border-color: #d4d4d8; }
+
+.light .hover\:bg-zinc-800:hover { background-color: var(--bg-hover); }
+.light .hover\:text-zinc-200:hover { color: var(--text-primary); }
+.light .hover\:text-zinc-300:hover { color: #3f3f46; }
+.light .hover\:border-zinc-600:hover { border-color: #a1a1aa; }
+.light .hover\:border-zinc-700:hover { border-color: #d4d4d8; }
+
+.light .bg-indigo-500\/10 { background-color: rgba(99, 102, 241, 0.06); }
+.light .bg-indigo-500\/5 { background-color: rgba(99, 102, 241, 0.04); }
+.light .bg-red-500\/10 { background-color: rgba(239, 68, 68, 0.06); }
+.light .border-red-500\/20 { border-color: rgba(239, 68, 68, 0.15); }
+
+.light .placeholder-zinc-500::placeholder { color: #a1a1aa; }
+.light .focus\:border-indigo-500:focus { border-color: #6366f1; }
+
+.light .bg-black\/50 { background-color: rgba(0, 0, 0, 0.2); }
+
+/* Scrollbar */
+.light ::-webkit-scrollbar-track { background: var(--bg-secondary); }
+.light ::-webkit-scrollbar-thumb { background: var(--border); }

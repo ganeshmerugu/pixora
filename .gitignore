@@ -1,0 +1,51 @@
+# Secrets — NEVER commit
+.env
+*.env.local
+.env.production
+credentials.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data & cache
+data/
+output/
+*.output
+.cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Models
+*.onnx
+*.pt
+*.bin
+*.safetensors
+
+# Frontend build
+pixora/frontend/node_modules/
+pixora/frontend/dist/
+
+# Logs
+*.log
+
+# DB
+*.db
+*.sqlite3

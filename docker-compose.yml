@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  pixora:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - PIXORA_DEPLOYMENT_MODE=serverless
+      - PIXORA_DEFAULT_TIER=1
+      - PIXORA_BUDGET_LIMIT_USD=1.0
+      - PIXORA_GROQ_API_KEY=${PIXORA_GROQ_API_KEY:-}
+      - PIXORA_TOGETHER_API_KEY=${PIXORA_TOGETHER_API_KEY:-}
+      - PIXORA_REPLICATE_API_TOKEN=${PIXORA_REPLICATE_API_TOKEN:-}
+      - PIXORA_ANTHROPIC_API_KEY=${PIXORA_ANTHROPIC_API_KEY:-}
+    restart: unless-stopped
