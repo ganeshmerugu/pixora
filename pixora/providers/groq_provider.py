@@ -34,7 +34,9 @@ class GroqProvider:
             raise ImportError("httpx required: pip install httpx")
         self._api_key = api_key
         self._model = model
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
+        import os
+        verify = os.environ.get("PIXORA_TLS_VERIFY", "true").lower() not in ("0", "false", "no")
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout), verify=verify)
         self._total_cost = 0.0
         self._total_tokens = 0
         self._total_requests = 0
