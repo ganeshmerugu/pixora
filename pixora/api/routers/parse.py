@@ -489,6 +489,7 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
     )
 
     vlm_result = None
+    vlm_error = ""
     if not has_text and is_image_format:
         # Strategy 1: VLM-first (Gemini free, best quality for images)
         try:
@@ -518,7 +519,8 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
                         f"cached={vlm_result.get('cached', False)}"
                     ), duration_ms=int((time.monotonic() - t0) * 1000))
         except Exception as exc:
-            logger.warning("parse: VLM primary failed: %s", exc)
+            logger.warning("parse: VLM primary failed: %s", exc, exc_info=True)
+            vlm_error = str(exc)
 
         # Strategy 2: OCR fallback (free, for when VLM is unavailable)
         if not has_text:
@@ -537,10 +539,20 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
 
         if not has_text:
             ext = os.path.splitext(filename)[1].lower()
-            raise ValueError(
+            from pixora.ocr.vlm_harness import is_vlm_available
+            vlm_status = is_vlm_available()
+            from pixora.config.settings import settings
+            has_key = bool(settings.gemini_api_key)
+            error_detail = (
                 f"Could not extract text from this {ext.upper().lstrip('.')} file. "
-                f"Set PIXORA_GEMINI_API_KEY (free) for VLM-based extraction."
+                f"VLM available: {vlm_status}, Gemini key set: {has_key}, "
+                f"Key prefix: {settings.gemini_api_key[:8]}... "
             )
+            if vlm_error:
+                error_detail += f"VLM error: {vlm_error[:200]}"
+            if not has_key:
+                error_detail += "Set PIXORA_GEMINI_API_KEY (free) for VLM-based extraction."
+            raise ValueError(error_detail)
 
     if not has_text:
         text = file_bytes.decode("utf-8", errors="replace")[:50000]
