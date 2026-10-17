@@ -523,6 +523,11 @@ def _merge_ocr_vlm(ocr_text: str, ocr_quality: float, vlm_result: dict) -> Unifi
     best_text = vlm_markdown if vlm_markdown else ocr_text
     best_markdown = vlm_markdown if vlm_markdown else ocr_text
 
+    # If both markdown and OCR are empty but extraction has data, build text
+    if not best_text and extraction:
+        best_text = "\n".join(f"{k}: {v}" for k, v in extraction.items() if not k.startswith("_") and v)
+        best_markdown = best_text
+
     # Confidence scoring:
     # - OCR-grounded VLM gets higher confidence (OCR anchors prevent hallucination)
     # - Standalone VLM gets lower weight

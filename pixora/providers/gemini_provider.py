@@ -70,8 +70,19 @@ class GeminiProvider:
 
         model_id = self._model.replace("models/", "")
         url = f"{GEMINI_API_URL}/{model_id}:generateContent?key={self._api_key}"
-        resp = await self._client.post(url, json=payload)
-        resp.raise_for_status()
+
+        import asyncio as _aio
+        for _attempt in range(4):
+            resp = await self._client.post(url, json=payload)
+            if resp.status_code == 429:
+                wait = (_attempt + 1) * 10
+                logger.warning("gemini: 429 rate limited, waiting %ds", wait)
+                await _aio.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
+        else:
+            resp.raise_for_status()
         data = resp.json()
 
         content = ""
@@ -127,8 +138,19 @@ class GeminiProvider:
 
         model_id = self._model.replace("models/", "")
         url = f"{GEMINI_API_URL}/{model_id}:generateContent?key={self._api_key}"
-        resp = await self._client.post(url, json=payload)
-        resp.raise_for_status()
+
+        import asyncio as _aio
+        for _attempt in range(4):
+            resp = await self._client.post(url, json=payload)
+            if resp.status_code == 429:
+                wait = (_attempt + 1) * 10
+                logger.warning("gemini: 429 rate limited, waiting %ds", wait)
+                await _aio.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
+        else:
+            resp.raise_for_status()
         data = resp.json()
 
         content = ""

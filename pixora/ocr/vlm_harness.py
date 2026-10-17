@@ -406,8 +406,10 @@ async def _call_vlm(
             return resp.get("content", ""), resp.get("cost_usd", 0.0)
 
     except Exception as exc:
-        logger.warning("vlm_harness: %s call failed: %s", provider_name, exc)
-
+        exc_str = str(exc)
+        logger.warning("vlm_harness: %s call failed: %s", provider_name, exc_str)
+        if "429" in exc_str:
+            return "__RATE_LIMITED__", 0.0
     return "", 0.0
 
 
@@ -419,10 +421,14 @@ async def _call_with_retry(
 ) -> tuple[str, float, int]:
     for attempt in range(MAX_RETRIES + 1):
         content, cost = await _call_vlm(provider, provider_name, image_bytes, prompt)
+        if content == "__RATE_LIMITED__":
+            wait = (attempt + 1) * 5
+            logger.info("vlm_harness: 429 rate limited, waiting %ds (attempt %d)", wait, attempt + 1)
+            await asyncio.sleep(wait)
+            continue
         if content.strip():
             return content, cost, attempt
         if attempt < MAX_RETRIES:
-            logger.info("vlm_harness: retry %d for %s", attempt + 1, provider_name)
             await asyncio.sleep(RETRY_DELAY_S * (attempt + 1))
     return "", 0.0, MAX_RETRIES + 1
 
