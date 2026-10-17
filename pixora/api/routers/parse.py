@@ -491,6 +491,7 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
     vlm_result = None
     vlm_error = ""
     doc_type = ""
+    unified = None
     if not has_text and is_image_format:
         # Single entry point: unified pipeline (OCR + VLM combined)
         try:
@@ -534,21 +535,24 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
             logger.warning("parse: unified pipeline failed: %s", exc, exc_info=True)
             vlm_error = str(exc)
 
+        # If unified pipeline returned but with empty/failed result, capture why
+        if not has_text and not vlm_error:
+            if unified:
+                vlm_error = f"method={unified.get('method','?')}, text_len={len(unified.get('text',''))}, engines={unified.get('engines_used',[])}, quality={unified.get('quality_scores',{})}"
+            else:
+                vlm_error = "unified pipeline returned None"
+
         if not has_text:
             ext = os.path.splitext(filename)[1].lower()
-            from pixora.ocr.vlm_harness import is_vlm_available
-            vlm_status = is_vlm_available()
+            from pixora.providers.provider_chain import has_vlm
             from pixora.config.settings import settings
             has_key = bool(settings.gemini_api_key)
             error_detail = (
                 f"Could not extract text from this {ext.upper().lstrip('.')} file. "
-                f"VLM available: {vlm_status}, Gemini key set: {has_key}, "
-                f"Key prefix: {settings.gemini_api_key[:8]}... "
+                f"VLM chain: {has_vlm()}, Gemini key: {has_key}, "
+                f"Key: {settings.gemini_api_key[:8]}... "
+                f"Detail: {vlm_error[:300]}"
             )
-            if vlm_error:
-                error_detail += f"VLM error: {vlm_error[:200]}"
-            if not has_key:
-                error_detail += "Set PIXORA_GEMINI_API_KEY (free) for VLM-based extraction."
             raise ValueError(error_detail)
 
     if not has_text:
