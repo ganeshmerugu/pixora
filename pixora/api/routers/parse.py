@@ -633,6 +633,25 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
         if vlm_result.get("tables"):
             extraction_result["_tables"] = vlm_result["tables"]
         auditor.log_stage("extractor_round_0", detail=f"tier={tier}, engine={engine_used}, fields={len(extraction_result)}, vlm_passthrough=true", duration_ms=0)
+
+        # Jev quality enhancement on VLM results (when available)
+        try:
+            from pixora.ocr.jev_decisions import is_available as jev_available
+            if jev_available():
+                t0_jev = time.monotonic()
+                from pixora.ocr.jev_decisions import rate_extraction_quality, classify_fields
+                jev_quality = await rate_extraction_quality(extraction_result, doc_type)
+                auditor.log_stage("jev_quality", detail=f"score={jev_quality:.2f}", duration_ms=int((time.monotonic()-t0_jev)*1000))
+                state["quality_score"] = jev_quality
+
+                t0_jev = time.monotonic()
+                classified = await classify_fields(extraction_result)
+                if classified:
+                    extraction_result["_field_types"] = classified
+                    auditor.log_stage("jev_classify", detail=f"classified={len(classified)} fields", duration_ms=int((time.monotonic()-t0_jev)*1000))
+        except Exception as exc:
+            logger.debug("parse: Jev enhancement skipped: %s", exc)
+
         state["extraction_result"] = extraction_result
         state["extraction_schema"] = {
             "schema_id": "dynamic", "doc_type": doc_type, "version": "1.0",
