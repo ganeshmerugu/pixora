@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
         await init_db()
         logger.info("Database initialized")
     except Exception as exc:
-        logger.warning("Database init skipped: %s", exc)
+        logger.info("Database init skipped: %s", exc)
 
     # Seed admin account
     from pixora.auth.models import get_user_by_email, create_user

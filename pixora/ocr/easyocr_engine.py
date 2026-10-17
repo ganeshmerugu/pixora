@@ -14,12 +14,20 @@ DEFAULT_TIMEOUT_S = 60
 
 _reader_cache: dict[str, object] = {}
 
+try:
+    import easyocr as _easyocr
+    _HAS_EASYOCR = True
+except ImportError:
+    _easyocr = None  # type: ignore[assignment]
+    _HAS_EASYOCR = False
+
 
 def _get_reader(languages: list[str] | None = None) -> object:
-    import easyocr
+    if not _HAS_EASYOCR:
+        raise ImportError("easyocr not installed")
     key = ",".join(sorted(languages or ["en"]))
     if key not in _reader_cache:
-        _reader_cache[key] = easyocr.Reader(languages or ["en"], gpu=False, verbose=False)
+        _reader_cache[key] = _easyocr.Reader(languages or ["en"], gpu=False, verbose=False)
     return _reader_cache[key]
 
 
@@ -35,8 +43,7 @@ class EasyOCREngine(OCREngine):
         languages: list[str] | None = None,
         page_number: int = 1,
     ) -> list[RecognizedRegion]:
-        if not image_bytes:
-            logger.warning("easyocr: empty image_bytes received")
+        if not _HAS_EASYOCR or not image_bytes:
             return []
 
         loop = asyncio.get_running_loop()

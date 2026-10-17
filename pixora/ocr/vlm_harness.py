@@ -86,71 +86,84 @@ def _cache_put(key: str, result: VLMResult) -> None:
 
 # ── Domain-Specific Prompts ───────────────────────────────────
 
+_BBOX_SUFFIX = (
+    '\n\nWrap your response as: {"fields": {<your extracted fields>}, '
+    '"bboxes": {<field_name>: {"left": 0.xx, "top": 0.xx, "right": 0.xx, "bottom": 0.xx}, ...}} '
+    "where bbox values are fractions (0.0-1.0) of image dimensions. "
+    "Return ONLY valid JSON, no markdown fences."
+)
+
 DOMAIN_PROMPTS: dict[str, str] = {
     "invoice": (
-        "Extract ALL fields from this invoice image. Return JSON with these keys where applicable:\n"
+        "Extract ALL fields from this invoice image. Include these keys where applicable:\n"
         "vendor_name, vendor_address, invoice_number, invoice_date, due_date, po_number,\n"
         "bill_to_name, bill_to_address, line_items (array of {description, quantity, unit_price, amount}),\n"
         "subtotal, tax, total_due, payment_terms, bank_details.\n"
-        "Extract exact values as shown. Use null for fields not visible."
+        "Extract exact values as shown. Use null for fields not visible." + _BBOX_SUFFIX
     ),
     "receipt": (
-        "Extract ALL fields from this receipt image. Return JSON with:\n"
+        "Extract ALL fields from this receipt image. Include:\n"
         "store_name, store_address, date, time, items (array of {name, price}),\n"
         "subtotal, tax, total, payment_method, card_last_four, cashier.\n"
-        "Extract exact values as shown."
+        "Extract exact values as shown." + _BBOX_SUFFIX
     ),
     "medical": (
-        "Extract ALL fields from this medical document. Return JSON with:\n"
+        "Extract ALL fields from this medical document. Include:\n"
         "patient_name, date_of_birth, mrn, ordering_physician, collection_date, report_date,\n"
         "diagnosis, lab_results (object with test_name: value pairs), medications,\n"
-        "allergies, vital_signs. Extract exact values as shown."
+        "allergies, vital_signs. Extract exact values as shown." + _BBOX_SUFFIX
     ),
     "id_card": (
-        "Extract ALL fields from this ID card/document. Return JSON with:\n"
+        "Extract ALL fields from this ID card/document. Include:\n"
         "document_type, document_number, full_name, date_of_birth, gender,\n"
         "fathers_name, mothers_name, address, issue_date, expiry_date,\n"
         "issuing_authority, nationality, photo_present, signature_present.\n"
-        "Names are VALUES, not keys. Extract exact text as shown."
+        "Names are VALUES, not keys. Extract exact text as shown." + _BBOX_SUFFIX
     ),
     "contract": (
-        "Extract ALL fields from this contract/agreement. Return JSON with:\n"
+        "Extract ALL fields from this contract/agreement. Include:\n"
         "agreement_type, agreement_number, effective_date, expiration_date,\n"
         "party_a, party_a_address, party_b, party_b_address,\n"
         "contract_value, payment_terms, governing_law, signatories.\n"
-        "Extract exact values as shown."
+        "Extract exact values as shown." + _BBOX_SUFFIX
     ),
     "insurance": (
-        "Extract ALL fields from this insurance document. Return JSON with:\n"
+        "Extract ALL fields from this insurance document. Include:\n"
         "policy_number, claim_number, policyholder, insured_name,\n"
         "date_of_loss, coverage_type, deductible, claim_amount,\n"
-        "adjuster, status. Extract exact values as shown."
+        "adjuster, status. Extract exact values as shown." + _BBOX_SUFFIX
     ),
     "bank_statement": (
-        "Extract ALL fields from this bank statement. Return JSON with:\n"
+        "Extract ALL fields from this bank statement. Include:\n"
         "bank_name, account_number, account_holder, statement_period,\n"
         "opening_balance, closing_balance, total_deposits, total_withdrawals,\n"
         "transactions (array of {date, description, amount, type}).\n"
-        "Extract exact values as shown."
+        "Extract exact values as shown." + _BBOX_SUFFIX
     ),
 }
 
 GENERIC_PROMPT = (
-    "Extract ALL structured data from this document image.\n"
-    "Return a JSON object with two keys:\n\n"
-    "1. \"fields\": object where keys are field names in snake_case and values are the exact text\n"
-    "2. \"bboxes\": object where keys are the SAME field names and values are "
+    "You are an expert document parser. Extract ALL structured data from this document image.\n\n"
+    "Return a JSON object with two keys:\n"
+    "1. \"fields\": object where each key is a descriptive snake_case field name and each value is the EXACT text from the document\n"
+    "2. \"bboxes\": object where each key matches a field name and the value is "
     "{\"left\": 0.xx, \"top\": 0.xx, \"right\": 0.xx, \"bottom\": 0.xx} "
-    "as fractions (0-1) of the image width/height showing WHERE the value appears\n\n"
-    "Rules:\n"
-    "- Names of people are VALUES, not keys\n"
-    "- Dates should contain only the date\n"
-    "- Include all visible fields: IDs, names, dates, numbers, addresses\n\n"
+    "as fractions (0.0-1.0) of image width/height\n\n"
+    "Critical rules:\n"
+    "- Read EVERY piece of text visible in the document — headers, body, footers, stamps, handwriting\n"
+    "- People's names, company names, and addresses are VALUES under descriptive keys (e.g. \"sender_name\", \"recipient_address\")\n"
+    "- Preserve exact formatting: \"$1,234.56\" not \"1234.56\", \"03/15/2024\" not \"2024-03-15\"\n"
+    "- For forms: the printed label is the KEY, the filled-in/typed text is the VALUE\n"
+    "- For tables: extract key summary fields; use \"items\" array for line items\n"
+    "- For long text blocks: use the section heading as key, full paragraph as value\n"
+    "- Include document IDs, reference numbers, bates numbers, page numbers\n"
+    "- Bounding boxes must tightly wrap the VALUE text, not the label\n\n"
     "Example:\n"
-    "{\"fields\": {\"name\": \"John Doe\", \"date\": \"03/15/2024\"}, "
-    "\"bboxes\": {\"name\": {\"left\": 0.3, \"top\": 0.15, \"right\": 0.7, \"bottom\": 0.18}, "
-    "\"date\": {\"left\": 0.7, \"top\": 0.15, \"right\": 0.9, \"bottom\": 0.18}}}\n\n"
-    "Return ONLY valid JSON."
+    "{\"fields\": {\"vendor_name\": \"Acme Corp\", \"invoice_date\": \"03/15/2024\", \"total\": \"$1,234.56\"}, "
+    "\"bboxes\": {\"vendor_name\": {\"left\": 0.1, \"top\": 0.05, \"right\": 0.4, \"bottom\": 0.08}, "
+    "\"invoice_date\": {\"left\": 0.7, \"top\": 0.05, \"right\": 0.9, \"bottom\": 0.08}, "
+    "\"total\": {\"left\": 0.7, \"top\": 0.85, \"right\": 0.9, \"bottom\": 0.88}}}\n\n"
+    "Return ONLY valid JSON, no markdown fences."
 )
 
 MARKDOWN_PROMPT = (
@@ -227,9 +240,9 @@ def preprocess_for_vlm(image_bytes: bytes) -> tuple[bytes, list[str]]:
                 arr = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(arr)
             applied.append("clahe")
 
-            # 8. Sharpen
-            kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
-            arr = cv2.filter2D(arr, -1, kernel)
+            # 8. Unsharp mask (gentler than kernel sharpen — preserves thin strokes)
+            blurred = cv2.GaussianBlur(arr, (0, 0), 3)
+            arr = cv2.addWeighted(arr, 1.5, blurred, -0.5, 0)
             applied.append("sharpen")
 
             # 9. Border removal

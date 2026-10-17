@@ -12,16 +12,18 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _redis_client = None
+_redis_checked = False
 _memory_cache: dict[str, tuple[Any, float]] = {}
 
 
 async def get_redis():
-    global _redis_client
-    if _redis_client is not None:
+    global _redis_client, _redis_checked
+    if _redis_checked:
         return _redis_client
 
     from pixora.config.settings import settings
     if not settings.redis_url:
+        _redis_checked = True
         return None
 
     try:
@@ -29,10 +31,11 @@ async def get_redis():
         _redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
         await _redis_client.ping()
         logger.info("Redis connected: %s", settings.redis_url)
-        return _redis_client
     except Exception as exc:
-        logger.warning("Redis unavailable: %s — using in-memory cache", exc)
-        return None
+        logger.info("Redis unavailable: %s — using in-memory cache", exc)
+        _redis_client = None
+    _redis_checked = True
+    return _redis_client
 
 
 async def cache_get(key: str) -> Any | None:
