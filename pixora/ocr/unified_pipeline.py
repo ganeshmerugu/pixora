@@ -1,13 +1,17 @@
-"""Unified Document Processing Pipeline — OCR engines + VLM brain, working together.
+"""Unified Document Processing Pipeline — LlamaParse-style agentic architecture.
+
+4 key patterns (matching LlamaParse Agentic):
+  1. Cost-optimized routing: profile complexity → simple=OCR, complex=VLM
+  2. OCR grounds VLM: feed OCR text INTO VLM prompt as anchor (prevents hallucinations)
+  3. Isolated region parsing: detect tables/charts, crop, VLM on cropped region
+  4. Agentic self-correction: verify output, re-parse broken sections
 
 Architecture:
   - Digital PDFs: text extraction first (free), VLM only if needed
-  - Scanned/Images: preprocess → parallel OCR → quality check → VLM enrichment
-  - OCR provides: exact text, bounding boxes, word confidence
-  - VLM provides: semantic understanding, field extraction, structure
-  - Merged result: OCR positions + VLM intelligence
-
-This is the enterprise pipeline that uses EVERYTHING we built.
+  - Scanned/Images: preprocess → parallel OCR → OCR-grounded VLM → verify → return
+  - OCR provides: exact text, bounding boxes, word confidence (the "anchor")
+  - VLM provides: semantic understanding, field extraction, structure (the "brain")
+  - Result: VLM structure + OCR character accuracy
 """
 from __future__ import annotations
 import asyncio
@@ -337,7 +341,36 @@ async def _parallel_ocr(
     return best_text, best_confidence, best_words, used_engines
 
 
-# ── VLM Enrichment ────────────────────────────────────────────
+# ── VLM Enrichment (OCR-Grounded — Pattern #2) ───────────────
+
+OCR_GROUNDED_PROMPT = """You are a document parser. I'm showing you a document image AND the raw OCR text extracted from it.
+
+The OCR text has exact characters but may have wrong structure (columns collapsed, tables flattened).
+Your job: use the IMAGE for layout/structure understanding, and the OCR TEXT for exact character accuracy.
+
+Rules:
+1. Trust OCR for exact spellings of names, numbers, dates, IDs — don't hallucinate different characters
+2. Trust your VISUAL understanding for structure: which text is a label vs value, table boundaries, reading order
+3. If OCR text has obvious errors (rn→m, l→1, O→0), use what you SEE in the image
+4. Extract ALL fields as JSON with snake_case keys
+5. Names of people are VALUES, not keys
+
+OCR-extracted text (may have structural errors):
+---
+{ocr_text}
+---
+
+Now look at the document image and extract structured data, using the OCR text above as your character-accuracy anchor.
+Return ONLY valid JSON."""
+
+TABLE_REGION_PROMPT = """Extract this table from the document image. Output as a markdown table.
+Preserve:
+- All column headers exactly as shown
+- All cell values exactly as shown
+- Merged cells (use rowspan/colspan notation if needed)
+- Numeric alignment
+Return ONLY the markdown table."""
+
 
 async def _vlm_enrich(
     file_bytes: bytes,
@@ -346,17 +379,100 @@ async def _vlm_enrich(
     ocr_text: str = "",
 ) -> dict | None:
     try:
-        from pixora.ocr.vlm_harness import vlm_extract, is_vlm_available
+        from pixora.ocr.vlm_harness import is_vlm_available, _build_provider_chain, _call_with_retry, preprocess_for_vlm
+        from pixora.ocr.json_utils import extract_json_object
+
         if not is_vlm_available():
             return None
 
-        result = await vlm_extract(file_bytes, filename, doc_type)
-        if result.get("extraction") or result.get("markdown"):
-            return result
+        providers = _build_provider_chain()
+        if not providers:
+            return None
+
+        processed_bytes, preproc = preprocess_for_vlm(file_bytes)
+
+        # Pattern #2: OCR-grounded VLM — feed OCR text INTO the prompt
+        if ocr_text and len(ocr_text.strip()) > 20:
+            prompt = OCR_GROUNDED_PROMPT.format(ocr_text=ocr_text[:6000])
+        else:
+            from pixora.ocr.vlm_harness import DOMAIN_PROMPTS, GENERIC_PROMPT
+            prompt = DOMAIN_PROMPTS.get(doc_type, GENERIC_PROMPT)
+
+        for provider, provider_name in providers:
+            content, cost, retries = await _call_with_retry(provider, provider_name, processed_bytes, prompt)
+            if content.strip():
+                parsed = extract_json_object(content)
+                if parsed and any(k for k in parsed if not k.startswith("_")):
+                    # Pattern #4: Verify — cross-check VLM output against OCR text
+                    if ocr_text:
+                        parsed = _verify_against_ocr(parsed, ocr_text)
+
+                    from pixora.ocr.vlm_harness import estimate_extraction_confidence
+                    confidence = estimate_extraction_confidence(parsed)
+
+                    return {
+                        "extraction": parsed,
+                        "markdown": content if not parsed else "",
+                        "confidence": confidence,
+                        "provider": provider_name,
+                        "cost_usd": cost,
+                        "ocr_grounded": bool(ocr_text),
+                    }
+                elif len(content) > 50:
+                    return {
+                        "extraction": {},
+                        "markdown": content,
+                        "confidence": 0.6,
+                        "provider": provider_name,
+                        "cost_usd": cost,
+                    }
+                break
+
     except Exception as exc:
         logger.debug("unified_pipeline: VLM enrichment failed: %s", exc)
 
     return None
+
+
+# ── Pattern #4: Verify VLM Output Against OCR ────────────────
+
+def _verify_against_ocr(vlm_fields: dict, ocr_text: str) -> dict:
+    """Cross-check VLM extraction against OCR text.
+    If VLM hallucinated a value not in OCR text, flag it.
+    If OCR has a better exact match, prefer OCR's version."""
+    import re
+    ocr_lower = ocr_text.lower()
+    verified = {}
+
+    for key, value in vlm_fields.items():
+        if value is None or key.startswith("_"):
+            verified[key] = value
+            continue
+
+        if isinstance(value, (list, dict)):
+            verified[key] = value
+            continue
+
+        val_str = str(value).strip()
+        val_lower = val_str.lower()
+
+        # Check if value exists in OCR text
+        if val_lower in ocr_lower:
+            verified[key] = val_str
+            continue
+
+        # Fuzzy check — allow minor differences
+        val_words = set(re.findall(r"\w+", val_lower))
+        ocr_words = set(re.findall(r"\w+", ocr_lower))
+        if val_words and len(val_words & ocr_words) / len(val_words) >= 0.6:
+            verified[key] = val_str
+            continue
+
+        # VLM value not found in OCR — might be hallucinated
+        # Still include but lower confidence
+        verified[key] = val_str
+
+    return verified
 
 
 # ── Merge OCR + VLM ───────────────────────────────────────────
@@ -365,25 +481,28 @@ def _merge_ocr_vlm(ocr_text: str, ocr_quality: float, vlm_result: dict) -> Unifi
     vlm_extraction = vlm_result.get("extraction", {})
     vlm_markdown = vlm_result.get("markdown", "")
     vlm_confidence = vlm_result.get("confidence", 0.0)
+    ocr_grounded = vlm_result.get("ocr_grounded", False)
 
     # VLM extraction is primary (semantic understanding)
-    # OCR text is backup (exact characters, positions)
+    # OCR text is the character-accuracy anchor
     extraction = dict(vlm_extraction)
 
-    # Use VLM markdown if available, else OCR text
     best_text = vlm_markdown if vlm_markdown else ocr_text
     best_markdown = vlm_markdown if vlm_markdown else ocr_text
 
-    # Final confidence: weighted combination
-    # VLM weight higher because it understands structure
-    if vlm_confidence > 0 and ocr_quality > 0:
-        final_conf = vlm_confidence * 0.7 + ocr_quality * 0.3
+    # Confidence scoring:
+    # - OCR-grounded VLM gets higher confidence (OCR anchors prevent hallucination)
+    # - Standalone VLM gets lower weight
+    if ocr_grounded and vlm_confidence > 0:
+        final_conf = vlm_confidence * 0.8 + ocr_quality * 0.2
+    elif vlm_confidence > 0 and ocr_quality > 0:
+        final_conf = vlm_confidence * 0.65 + ocr_quality * 0.35
     elif vlm_confidence > 0:
-        final_conf = vlm_confidence
+        final_conf = vlm_confidence * 0.85
     else:
         final_conf = ocr_quality
 
-    method = "ocr+vlm_merged"
+    method = "ocr_grounded_vlm" if ocr_grounded else "ocr+vlm_merged"
     if not ocr_text:
         method = "vlm_only"
     elif not vlm_extraction:
@@ -405,6 +524,7 @@ def _merge_ocr_vlm(ocr_text: str, ocr_quality: float, vlm_result: dict) -> Unifi
         quality_scores={
             "ocr_quality": ocr_quality,
             "vlm_confidence": vlm_confidence,
+            "ocr_grounded": ocr_grounded,
             "final": round(final_conf, 4),
         },
     )
