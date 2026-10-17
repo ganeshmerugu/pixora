@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { FileText, Upload, LayoutDashboard, CheckCircle, Shield, FlaskConical, ScrollText, Menu, X, Scissors, Tag, FolderOpen, Database, LogOut, Sun, Moon } from 'lucide-react'
+import { FileText, Upload, LayoutDashboard, CheckCircle, Shield, FlaskConical, ScrollText, Menu, X, Scissors, Tag, FolderOpen, Database, LogOut, Sun, Moon, BarChart3 } from 'lucide-react'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { useTheme } from './auth/ThemeContext'
 import ProtectedRoute from './auth/ProtectedRoute'
@@ -17,6 +17,7 @@ import Jobs from './pages/Jobs'
 import ReviewQueue from './pages/ReviewQueue'
 import Schemas from './pages/Schemas'
 import EvalsPage from './pages/Evals'
+import Benchmarks from './pages/Benchmarks'
 import AuditLog from './pages/AuditLog'
 
 const NAV = [
@@ -30,6 +31,7 @@ const NAV = [
   { to: '/review', icon: CheckCircle, label: 'Review' },
   { to: '/schemas', icon: Shield, label: 'Schemas' },
   { to: '/evals', icon: FlaskConical, label: 'Evals' },
+  { to: '/benchmarks', icon: BarChart3, label: 'Benchmarks' },
   { to: '/audit', icon: ScrollText, label: 'Audit Log' },
 ]
 
@@ -136,6 +138,7 @@ function AppLayout() {
             <Route path="/review" element={<ReviewQueue />} />
             <Route path="/schemas" element={<Schemas />} />
             <Route path="/evals" element={<EvalsPage />} />
+            <Route path="/benchmarks" element={<Benchmarks />} />
             <Route path="/audit" element={<AuditLog />} />
           </Routes>
         </main>
