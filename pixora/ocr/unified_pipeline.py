@@ -99,10 +99,11 @@ async def process_document(
             )
 
     # ══════════════════════════════════════════════════════════
-    # BRANCH 2: Scanned PDF / Image — PARALLEL OCR + VLM
+    # BRANCH 2: Scanned PDF / Image — Sequential OCR → VLM
+    # OCR feeds INTO VLM prompt (grounding anchor) — must be sequential
     # ══════════════════════════════════════════════════════════
 
-    # Step 1: Preprocess (fast — ~50ms)
+    # Step 1: Preprocess for OCR (lightweight — skip heavy CV2 if no opencv)
     processed_bytes = file_bytes
     preproc_applied: list[str] = []
     if enable_preprocessing and is_image:
@@ -113,35 +114,33 @@ async def process_document(
         if not processed_bytes:
             processed_bytes = file_bytes
 
-    # Step 2: PARALLEL — run OCR and VLM simultaneously
-    # VLM uses GENERIC_PROMPT (no OCR grounding) for speed
-    # OCR text is used post-hoc for verification
-    async def _ocr_task():
-        text, conf, words, engs = await _parallel_ocr(processed_bytes)
-        if text:
-            from pixora.ocr.smart_pipeline import apply_postprocessing
-            text, pp = apply_postprocessing(text, doc_type)
-            return text, conf, words, engs, pp
-        return text, conf, words, engs, []
-
-    async def _vlm_task():
-        if not enable_vlm:
-            return None
-        return await _vlm_enrich(file_bytes, filename, doc_type, "")
-
-    ocr_result, vlm_result = await asyncio.gather(_ocr_task(), _vlm_task())
-    ocr_text, ocr_confidence, ocr_words, ocr_engines, postproc = ocr_result
+    # Step 2: Fast OCR — Tesseract only (skip slow engines)
+    ocr_text, ocr_confidence, ocr_words, ocr_engines = await _parallel_ocr(processed_bytes)
     engines_used.extend(ocr_engines)
-    preproc_applied.extend(postproc)
+
+    # Step 3: Quick postprocess (confusion pairs, amount/date fixes)
+    if ocr_text:
+        from pixora.ocr.smart_pipeline import apply_postprocessing
+        ocr_text, postproc_applied = apply_postprocessing(ocr_text, doc_type)
+        preproc_applied.extend(postproc_applied)
 
     from pixora.ocr.smart_pipeline import estimate_text_quality
     ocr_quality = estimate_text_quality(ocr_text) if ocr_text else 0.0
 
-    # If VLM failed but OCR succeeded with good quality, try OCR-grounded VLM
-    if (not vlm_result or not vlm_result.get("extraction")) and ocr_text and ocr_quality >= 0.3:
-        vlm_result = await _vlm_enrich(file_bytes, filename, doc_type, ocr_text)
+    # Step 4: Decide — skip VLM if OCR quality is high enough
+    if ocr_quality >= 0.8 and not enable_vlm:
+        return UnifiedResult(
+            text=ocr_text, markdown=ocr_text, method="ocr_only",
+            ocr_text=ocr_text, ocr_confidence=ocr_quality, ocr_words=ocr_words,
+            final_confidence=ocr_quality, cost_usd=0.0,
+            latency_ms=round((time.monotonic() - start) * 1000, 1),
+            engines_used=engines_used, preprocessing=preproc_applied,
+            quality_scores={"ocr_quality": ocr_quality},
+        )
 
-    # If no VLM result at all, return OCR-only
+    # Step 5: OCR-grounded VLM (feeds OCR text as character anchor)
+    vlm_result = await _vlm_enrich(file_bytes, filename, doc_type, ocr_text)
+
     if not vlm_result or not vlm_result.get("extraction"):
         return UnifiedResult(
             text=ocr_text, markdown=ocr_text, method="ocr_only",
@@ -152,33 +151,30 @@ async def process_document(
             quality_scores={"ocr_quality": ocr_quality},
         )
 
-    # Step 3: Process VLM result
     total_cost += vlm_result.get("cost_usd", 0)
     engines_used.append(f"vlm_{vlm_result.get('provider', '?')}")
     vlm_extraction = vlm_result["extraction"]
 
-    # Step 4: Verify VLM fields against OCR (post-hoc grounding)
+    # Step 6: Verify VLM against OCR (catch hallucinations)
     grounding_results = {}
     if ocr_text:
         try:
             from pixora.ocr.jev_decisions import verify_extraction_grounded, is_available as jev_available
             if jev_available():
                 grounding_results = await verify_extraction_grounded(ocr_text, vlm_extraction)
+                hallucinated = [k for k, v in grounding_results.items() if not v.get("grounded", True)]
+                if hallucinated:
+                    logger.warning("unified: flagged %d hallucinated fields: %s", len(hallucinated), hallucinated)
+                    for field in hallucinated:
+                        vlm_extraction[f"_{field}_grounding"] = grounding_results[field]
             else:
                 vlm_extraction = _verify_against_ocr(vlm_extraction, ocr_text)
         except Exception:
             vlm_extraction = _verify_against_ocr(vlm_extraction, ocr_text)
 
-        if grounding_results:
-            hallucinated = [k for k, v in grounding_results.items() if not v.get("grounded", True)]
-            if hallucinated:
-                logger.warning("unified: flagged %d hallucinated fields: %s", len(hallucinated), hallucinated)
-                for field in hallucinated:
-                    vlm_extraction[f"_{field}_grounding"] = grounding_results[field]
-
     vlm_result["extraction"] = vlm_extraction
 
-    # Step 5: Merge OCR + VLM
+    # Step 7: Merge OCR + VLM
     merged = _merge_ocr_vlm(ocr_text, ocr_quality, vlm_result)
     merged["ocr_words"] = ocr_words
     merged["preprocessing"] = preproc_applied

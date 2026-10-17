@@ -223,11 +223,8 @@ def preprocess_for_vlm(image_bytes: bytes) -> tuple[bytes, list[str]]:
             arr = _remove_shadows(arr)
             applied.append("deshadow")
 
-            # 6. Denoise (NLM)
-            if len(arr.shape) == 3:
-                arr = cv2.fastNlMeansDenoisingColored(arr, None, h=6, hForColorComponents=6, templateWindowSize=7, searchWindowSize=21)
-            else:
-                arr = cv2.fastNlMeansDenoising(arr, None, h=6, templateWindowSize=7, searchWindowSize=21)
+            # 6. Denoise — skip NLM (too slow ~200ms). Bilateral filter is faster.
+            arr = cv2.bilateralFilter(arr, 5, 50, 50)
             applied.append("denoise")
 
             # 7. CLAHE contrast
@@ -257,10 +254,10 @@ def preprocess_for_vlm(image_bytes: bytes) -> tuple[bytes, list[str]]:
             img = ImageEnhance.Sharpness(img).enhance(1.5)
             applied.append("pil_fallback")
 
-        # 10. DPI upscale (min 1500px short side)
+        # 10. DPI upscale only for very small images (min 800px short side)
         w, h = img.size
-        if min(w, h) < 1500:
-            scale = 1500 / min(w, h)
+        if min(w, h) < 800:
+            scale = 800 / min(w, h)
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
             applied.append("upscale")
 
