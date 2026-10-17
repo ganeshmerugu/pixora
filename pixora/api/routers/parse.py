@@ -501,6 +501,10 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
             unified_text = unified.get("text", "") or unified.get("markdown", "")
             unified_ext = unified.get("extraction", {})
 
+            # Build text from extraction if text/markdown is empty
+            if not unified_text and unified_ext:
+                unified_text = "\n".join(f"{k}: {v}" for k, v in unified_ext.items() if not k.startswith("_") and v)
+
             if unified_text and unified_text.strip():
                 doc_tree = DocumentTree(
                     document_id=doc_id,
