@@ -1,9 +1,12 @@
 services:
   - type: web
     name: pixora
-    runtime: docker
+    runtime: python
     plan: free
-    dockerfilePath: ./Dockerfile
+    buildCommand: |
+      apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-eng
+      pip install -r requirements.txt
+    startCommand: uvicorn pixora.api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PIXORA_DEPLOYMENT_MODE
         value: serverless
@@ -11,15 +14,13 @@ services:
         value: "1"
       - key: PIXORA_BUDGET_LIMIT_USD
         value: "1.0"
-      - key: PIXORA_TLS_VERIFY
-        value: "false"
-      - key: PIXORA_GEMINI_API_KEY
-        sync: false
-      - key: PIXORA_JWT_SECRET
-        generateValue: true
       - key: PIXORA_GROQ_API_KEY
         sync: false
       - key: PIXORA_TOGETHER_API_KEY
+        sync: false
+      - key: PIXORA_REPLICATE_API_TOKEN
+        sync: false
+      - key: PIXORA_ANTHROPIC_API_KEY
         sync: false
     healthCheckPath: /api/v1/health
     autoDeploy: true
