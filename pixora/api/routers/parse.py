@@ -1212,7 +1212,7 @@ def _clean_extracted_value(value: str) -> str:
 
 
 def _post_process_extraction(extraction: dict) -> dict:
-    """Self-healing post-processor: clean values, remove junk fields, deduplicate."""
+    """Enterprise post-processor: clean → normalize → PII detect."""
     cleaned: dict = {}
     for k, v in extraction.items():
         if k.startswith("_"):
@@ -1221,16 +1221,20 @@ def _post_process_extraction(extraction: dict) -> dict:
         if not isinstance(v, str):
             cleaned[k] = v
             continue
-        # Skip section-header-as-field
         if _SECTION_HEADER_RE.search(k.replace("_", " ")):
             continue
-        # Skip fields whose value is just another label:value (misparse)
         if v.count(":") > 2 and len(v) > 150:
             continue
-        # Clean JSON artifacts from values
         v = _clean_extracted_value(v)
         if v:
             cleaned[k] = v
+
+    try:
+        from pixora.ocr.post_normalize import normalize_extraction
+        cleaned = normalize_extraction(cleaned, enable_pii_detection=True)
+    except Exception:
+        pass
+
     return cleaned
 
 

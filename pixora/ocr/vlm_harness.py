@@ -160,41 +160,97 @@ MARKDOWN_PROMPT = (
 )
 
 
-# ── Image Preprocessing ───────────────────────────────────────
+# ── Enterprise Image Preprocessing ────────────────────────────
 
 def preprocess_for_vlm(image_bytes: bytes) -> tuple[bytes, list[str]]:
+    """Full pipeline: EXIF → rotate → deskew → shadow remove → denoise →
+    CLAHE contrast → sharpen → border remove → DPI upscale → resize."""
     applied: list[str] = []
 
     try:
         from PIL import Image, ImageOps, ImageEnhance
+        import numpy as np
 
         img = Image.open(io.BytesIO(image_bytes))
 
+        # 1. EXIF
         try:
             img = ImageOps.exif_transpose(img)
-            applied.append("exif_fix")
+            applied.append("exif")
         except Exception:
             pass
 
+        # 2. RGB
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
-            applied.append("rgb_convert")
+            applied.append("rgb")
 
+        # 3. Rotation detect (90/180)
+        img, rot = _detect_rotation(img)
+        if rot:
+            applied.append(f"rotate_{rot}")
+
+        # OpenCV path (full enterprise pipeline)
+        try:
+            import cv2
+            arr = np.array(img)
+
+            # 4. Deskew
+            arr, angle = _deskew(arr)
+            if abs(angle) > 0.5:
+                applied.append(f"deskew_{angle:.1f}")
+
+            # 5. Shadow removal
+            arr = _remove_shadows(arr)
+            applied.append("deshadow")
+
+            # 6. Denoise (NLM)
+            if len(arr.shape) == 3:
+                arr = cv2.fastNlMeansDenoisingColored(arr, None, h=6, hForColorComponents=6, templateWindowSize=7, searchWindowSize=21)
+            else:
+                arr = cv2.fastNlMeansDenoising(arr, None, h=6, templateWindowSize=7, searchWindowSize=21)
+            applied.append("denoise")
+
+            # 7. CLAHE contrast
+            if len(arr.shape) == 3:
+                lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+                clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+                lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+                arr = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+            else:
+                arr = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(arr)
+            applied.append("clahe")
+
+            # 8. Sharpen
+            kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+            arr = cv2.filter2D(arr, -1, kernel)
+            applied.append("sharpen")
+
+            # 9. Border removal
+            arr, trimmed = _remove_borders(arr)
+            if trimmed:
+                applied.append("deborder")
+
+            img = Image.fromarray(arr)
+
+        except ImportError:
+            img = ImageEnhance.Contrast(img).enhance(1.4)
+            img = ImageEnhance.Sharpness(img).enhance(1.5)
+            applied.append("pil_fallback")
+
+        # 10. DPI upscale (min 1500px short side)
+        w, h = img.size
+        if min(w, h) < 1500:
+            scale = 1500 / min(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            applied.append("upscale")
+
+        # 11. Cap max for API
         w, h = img.size
         if max(w, h) > IMAGE_MAX_DIMENSION:
             ratio = IMAGE_MAX_DIMENSION / max(w, h)
-            new_size = (int(w * ratio), int(h * ratio))
-            img = img.resize(new_size, Image.LANCZOS)
-            applied.append(f"resize_{new_size[0]}x{new_size[1]}")
-
-        if img.mode == "RGB":
-            enhancer = ImageEnhance.Contrast(img)
-            img = enhancer.enhance(1.3)
-            applied.append("contrast_1.3")
-
-            enhancer = ImageEnhance.Sharpness(img)
-            img = enhancer.enhance(1.5)
-            applied.append("sharpen_1.5")
+            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+            applied.append("cap")
 
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
@@ -202,7 +258,82 @@ def preprocess_for_vlm(image_bytes: bytes) -> tuple[bytes, list[str]]:
 
     except Exception as exc:
         logger.debug("vlm_harness: preprocessing failed: %s", exc)
-        return image_bytes, ["preprocessing_skipped"]
+        return image_bytes, ["skipped"]
+
+
+def _detect_rotation(img):
+    try:
+        import numpy as np
+        arr = np.array(img.convert("L"))
+        h, w = arr.shape
+        if w < h * 0.6:
+            return img.rotate(-90, expand=True), 90
+        top = np.count_nonzero(arr[:h // 2] < 128)
+        bot = np.count_nonzero(arr[h // 2:] < 128)
+        if bot > top * 2.0 and h > 200:
+            return img.rotate(180, expand=True), 180
+    except Exception:
+        pass
+    return img, 0
+
+
+def _deskew(arr):
+    import cv2, numpy as np
+    try:
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY) if len(arr.shape) == 3 else arr
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=100, maxLineGap=10)
+        if lines is None:
+            return arr, 0.0
+        angles = [np.degrees(np.arctan2(l[0][3] - l[0][1], l[0][2] - l[0][0])) for l in lines]
+        angles = [a for a in angles if abs(a) < 45]
+        if not angles:
+            return arr, 0.0
+        med = float(np.median(angles))
+        if abs(med) < 0.5:
+            return arr, 0.0
+        h, w = arr.shape[:2]
+        M = cv2.getRotationMatrix2D((w // 2, h // 2), med, 1.0)
+        return cv2.warpAffine(arr, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE), med
+    except Exception:
+        return arr, 0.0
+
+
+def _remove_shadows(arr):
+    import cv2, numpy as np
+    try:
+        if len(arr.shape) == 3:
+            planes = cv2.split(arr)
+            result = []
+            for p in planes:
+                bg = cv2.medianBlur(cv2.dilate(p, np.ones((7, 7), np.uint8)), 21)
+                diff = 255 - cv2.absdiff(p, bg)
+                result.append(cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8UC1))
+            return cv2.merge(result)
+        else:
+            bg = cv2.medianBlur(cv2.dilate(arr, np.ones((7, 7), np.uint8)), 21)
+            diff = 255 - cv2.absdiff(arr, bg)
+            return cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8UC1)
+    except Exception:
+        return arr
+
+
+def _remove_borders(arr):
+    import cv2, numpy as np
+    try:
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY) if len(arr.shape) == 3 else arr
+        _, thresh = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return arr, False
+        x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
+        ih, iw = arr.shape[:2]
+        if w > iw * 0.5 and h > ih * 0.5:
+            m = 5
+            return arr[max(0, y - m):min(ih, y + h + m), max(0, x - m):min(iw, x + w + m)], True
+    except Exception:
+        pass
+    return arr, False
 
 
 # ── Provider Chain ────────────────────────────────────────────
