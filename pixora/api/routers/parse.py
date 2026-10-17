@@ -813,21 +813,40 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
                     })
             p["text_spans"] = spans
 
-    # ── JEV DECISION 5: Locate fields in image (Box) ────────────
+    # ── Bbox Mapping: 4-tier strategy ────────────────────────────
     pw = pages[0].get("width", 0) if pages else 0
     ph = pages[0].get("height", 0) if pages else 0
     field_bboxes = []
 
-    try:
-        from pixora.ocr.jev_decisions import locate_fields_in_image, is_available as jev_available
-        if jev_available() and file_bytes and pw > 0:
-            field_bboxes = await locate_fields_in_image(file_bytes, extraction, pw, ph)
-            if field_bboxes:
-                auditor.log_stage("jev_bbox", detail=f"located={len(field_bboxes)} via Jev Box")
-    except Exception:
-        pass
+    # Strategy 1: VLM bboxes from extraction call (free, most accurate)
+    if vlm_result and vlm_result.get("metadata", {}).get("vlm_bboxes"):
+        vlm_bboxes = vlm_result["metadata"]["vlm_bboxes"]
+        for field_name, box in vlm_bboxes.items():
+            if isinstance(box, dict) and "left" in box:
+                x = max(0, round(box["left"] * pw))
+                y = max(0, round(box["top"] * ph))
+                x2 = min(pw, round(box["right"] * pw))
+                y2 = min(ph, round(box["bottom"] * ph))
+                field_bboxes.append({
+                    "field": field_name, "x": x, "y": y,
+                    "width": x2 - x, "height": y2 - y,
+                    "page": 1, "confidence": 0.9,
+                })
+        if field_bboxes:
+            auditor.log_stage("vlm_bbox", detail=f"located={len(field_bboxes)} from VLM response")
 
-    # Fallback: algorithmic bbox mapping
+    # Strategy 2: Jev Box (calibrated, per-field visual location)
+    if not field_bboxes:
+        try:
+            from pixora.ocr.jev_decisions import locate_fields_in_image, is_available as jev_available
+            if jev_available() and file_bytes and pw > 0:
+                field_bboxes = await locate_fields_in_image(file_bytes, extraction, pw, ph)
+                if field_bboxes:
+                    auditor.log_stage("jev_bbox", detail=f"located={len(field_bboxes)} via Jev Box")
+        except Exception:
+            pass
+
+    # Strategy 3: Algorithmic (Levenshtein + spatial + label anchoring)
     if not field_bboxes:
         try:
             from pixora.ocr.bbox_mapper import map_fields_to_bboxes

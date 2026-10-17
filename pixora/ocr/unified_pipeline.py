@@ -477,21 +477,32 @@ def _verify_against_ocr(vlm_fields: dict, ocr_text: str) -> dict:
         val_str = str(value).strip()
         val_lower = val_str.lower()
 
-        # Check if value exists in OCR text
+        # Check if value exists in OCR text (exact)
         if val_lower in ocr_lower:
             verified[key] = val_str
             continue
 
-        # Fuzzy check — allow minor differences
+        # Fuzzy word overlap (handles OCR garbling like "IXFROVEHENT" vs "IMPROVEMENT")
         val_words = set(re.findall(r"\w+", val_lower))
-        ocr_words = set(re.findall(r"\w+", ocr_lower))
-        if val_words and len(val_words & ocr_words) / len(val_words) >= 0.6:
+        ocr_word_set = set(re.findall(r"\w+", ocr_lower))
+        if val_words and len(val_words & ocr_word_set) / len(val_words) >= 0.4:
             verified[key] = val_str
             continue
 
-        # VLM value not found in OCR — might be hallucinated
-        # Still include but lower confidence
-        verified[key] = val_str
+        # Character-level fuzzy (catches OCR confusions like l/1, O/0, rn/m)
+        val_chars = re.sub(r"[^a-z0-9]", "", val_lower)
+        for ocr_word in ocr_word_set:
+            ocr_chars = re.sub(r"[^a-z0-9]", "", ocr_word)
+            if len(ocr_chars) >= 3 and len(val_chars) >= 3:
+                # Normalize OCR confusions before comparing
+                norm_val = val_chars.replace("0", "o").replace("1", "l").replace("5", "s")
+                norm_ocr = ocr_chars.replace("0", "o").replace("1", "l").replace("5", "s")
+                if norm_val in norm_ocr or norm_ocr in norm_val:
+                    verified[key] = val_str
+                    break
+        else:
+            # Still include — VLM might be correct even if OCR can't confirm
+            verified[key] = val_str
 
     return verified
 

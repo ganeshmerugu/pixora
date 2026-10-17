@@ -137,13 +137,19 @@ DOMAIN_PROMPTS: dict[str, str] = {
 
 GENERIC_PROMPT = (
     "Extract ALL structured data from this document image.\n"
-    "Return a JSON object where:\n"
-    "- Keys are descriptive field names in snake_case (use the field LABEL, not the value)\n"
-    "- Values are the exact text shown in the document\n"
+    "Return a JSON object with two keys:\n\n"
+    "1. \"fields\": object where keys are field names in snake_case and values are the exact text\n"
+    "2. \"bboxes\": object where keys are the SAME field names and values are "
+    "{\"left\": 0.xx, \"top\": 0.xx, \"right\": 0.xx, \"bottom\": 0.xx} "
+    "as fractions (0-1) of the image width/height showing WHERE the value appears\n\n"
+    "Rules:\n"
     "- Names of people are VALUES, not keys\n"
-    "- Dates should contain only the date, not extra words like 'Signature'\n"
-    "- Include tables as arrays of objects\n"
-    "- Include all visible fields: IDs, names, dates, numbers, addresses\n"
+    "- Dates should contain only the date\n"
+    "- Include all visible fields: IDs, names, dates, numbers, addresses\n\n"
+    "Example:\n"
+    "{\"fields\": {\"name\": \"John Doe\", \"date\": \"03/15/2024\"}, "
+    "\"bboxes\": {\"name\": {\"left\": 0.3, \"top\": 0.15, \"right\": 0.7, \"bottom\": 0.18}, "
+    "\"date\": {\"left\": 0.7, \"top\": 0.15, \"right\": 0.9, \"bottom\": 0.18}}}\n\n"
     "Return ONLY valid JSON."
 )
 
@@ -570,6 +576,7 @@ async def vlm_extract(
         processed_bytes, preproc_applied = preprocess_for_vlm(file_bytes)
 
     extraction: dict[str, Any] = {}
+    vlm_bboxes: dict[str, dict] = {}
     markdown = ""
     total_cost = 0.0
     total_retries = 0
@@ -583,9 +590,17 @@ async def vlm_extract(
         if content.strip():
             used_provider = provider_name
             parsed = extract_json_object(content)
-            if parsed and any(k for k in parsed if not k.startswith("_")):
-                extraction = parsed
-                break
+            if parsed:
+                # New format: {"fields": {...}, "bboxes": {...}}
+                if "fields" in parsed and isinstance(parsed["fields"], dict):
+                    extraction = parsed["fields"]
+                    vlm_bboxes = parsed.get("bboxes", {})
+                elif any(k for k in parsed if not k.startswith("_")):
+                    extraction = parsed
+                    vlm_bboxes = {}
+
+                if extraction:
+                    break
             if not parsed and len(content) > 50:
                 markdown = content
                 break
@@ -624,6 +639,9 @@ async def vlm_extract(
         retries=total_retries,
         preprocessing=preproc_applied,
     )
+
+    if vlm_bboxes:
+        result["metadata"] = {"vlm_bboxes": vlm_bboxes}
 
     if cache_key:
         _cache_put(cache_key, result)
