@@ -1,9 +1,12 @@
 from __future__ import annotations
 import io
+import logging
 import re
 import uuid
 import os
 import time
+
+logger = logging.getLogger(__name__)
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import Response
