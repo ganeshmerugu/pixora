@@ -492,51 +492,47 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
     vlm_error = ""
     doc_type = ""
     if not has_text and is_image_format:
-        # Strategy 1: VLM-first (Gemini free, best quality for images)
+        # Single entry point: unified pipeline (OCR + VLM combined)
         try:
-            from pixora.ocr.vlm_harness import vlm_extract as vlm_harness_extract, is_vlm_available
-            if is_vlm_available():
-                t0 = time.monotonic()
-                vlm_result = await vlm_harness_extract(file_bytes, filename, doc_type=doc_type)
-                vlm_md = vlm_result.get("markdown", "")
-                vlm_ext = vlm_result.get("extraction", {})
-                vlm_text = vlm_md or " ".join(str(v) for v in vlm_ext.values() if v)
+            from pixora.ocr.unified_pipeline import process_document
+            t0 = time.monotonic()
+            unified = await process_document(file_bytes, filename, doc_type="")
+            unified_text = unified.get("text", "") or unified.get("markdown", "")
+            unified_ext = unified.get("extraction", {})
 
-                if vlm_text and vlm_text.strip():
-                    doc_tree = DocumentTree(
-                        document_id=doc_id,
-                        pages=[Page(page_number=1, regions=[
-                            Region(id="r_vlm_0", type="TEXT", content=vlm_text, confidence=vlm_result.get("confidence", 0.85)),
-                        ])],
-                        source_format="vlm",
-                        text_layer_present=True,
-                    )
-                    has_text = True
-                    auditor.log_stage("vlm_primary", detail=(
-                        f"provider={vlm_result.get('provider', '?')}, "
-                        f"fields={len(vlm_ext)}, "
-                        f"confidence={vlm_result.get('confidence', 0):.2f}, "
-                        f"cost=${vlm_result.get('cost_usd', 0):.4f}, "
-                        f"cached={vlm_result.get('cached', False)}"
-                    ), duration_ms=int((time.monotonic() - t0) * 1000))
-        except Exception as exc:
-            logger.warning("parse: VLM primary failed: %s", exc, exc_info=True)
-            vlm_error = str(exc)
-
-        # Strategy 2: OCR fallback (free, for when VLM is unavailable)
-        if not has_text:
-            ocr_text = await _run_ocr(file_bytes, filename)
-            if ocr_text and ocr_text.strip():
+            if unified_text and unified_text.strip():
                 doc_tree = DocumentTree(
                     document_id=doc_id,
                     pages=[Page(page_number=1, regions=[
-                        Region(id="r_ocr_0", type="TEXT", content=ocr_text, confidence=0.75),
+                        Region(id="r_unified_0", type="TEXT", content=unified_text, confidence=unified.get("final_confidence", 0.8)),
                     ])],
-                    source_format="ocr",
+                    source_format=unified.get("method", "unified"),
                     text_layer_present=True,
                 )
                 has_text = True
-                auditor.log_stage("ocr_fallback", detail=f"len={len(ocr_text)}")
+
+                if unified_ext:
+                    vlm_result = {
+                        "extraction": unified_ext,
+                        "markdown": unified.get("markdown", ""),
+                        "confidence": unified.get("vlm_confidence", unified.get("final_confidence", 0.8)),
+                        "provider": unified.get("engines_used", ["?"])[-1] if unified.get("engines_used") else "?",
+                        "cost_usd": unified.get("cost_usd", 0),
+                        "cached": False,
+                        "tables": unified.get("tables", []),
+                    }
+
+                auditor.log_stage("unified_pipeline", detail=(
+                    f"method={unified.get('method', '?')}, "
+                    f"engines={unified.get('engines_used', [])}, "
+                    f"confidence={unified.get('final_confidence', 0):.2f}, "
+                    f"cost=${unified.get('cost_usd', 0):.4f}, "
+                    f"quality={unified.get('quality_scores', {})}"
+                ), duration_ms=int((time.monotonic() - t0) * 1000))
+
+        except Exception as exc:
+            logger.warning("parse: unified pipeline failed: %s", exc, exc_info=True)
+            vlm_error = str(exc)
 
         if not has_text:
             ext = os.path.splitext(filename)[1].lower()

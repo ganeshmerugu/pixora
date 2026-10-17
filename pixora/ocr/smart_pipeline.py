@@ -301,30 +301,8 @@ VLM_DOCUMENT_PROMPT = (
 def _get_vlm_provider(explicit_provider: Any = None):
     if explicit_provider:
         return explicit_provider, "explicit"
-
-    try:
-        from pixora.config.settings import settings
-
-        if getattr(settings, "gemini_api_key", ""):
-            from pixora.providers.gemini_provider import GeminiProvider
-            return GeminiProvider(api_key=settings.gemini_api_key), "gemini_free"
-
-        if settings.groq_api_key:
-            from pixora.providers.groq_provider import GroqProvider
-            return GroqProvider(api_key=settings.groq_api_key, model="llama-3.2-90b-vision-preview"), "groq_vision"
-
-        if settings.replicate_api_token:
-            from pixora.providers.replicate_provider import ReplicateProvider
-            return ReplicateProvider(api_token=settings.replicate_api_token, default_model="qwen-vl"), "replicate"
-
-        if settings.together_api_key:
-            from pixora.providers.together_ai import TogetherAIProvider
-            return TogetherAIProvider(api_key=settings.together_api_key, model="meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo"), "together_vision"
-
-    except Exception as exc:
-        logger.debug("smart_pipeline: no VLM provider available: %s", exc)
-
-    return None, "none"
+    from pixora.providers.provider_chain import get_best_provider
+    return get_best_provider()
 
 
 async def vlm_extract(

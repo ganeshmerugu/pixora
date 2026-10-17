@@ -339,31 +339,8 @@ def _remove_borders(arr):
 # ── Provider Chain ────────────────────────────────────────────
 
 def _build_provider_chain() -> list[tuple[Any, str]]:
-    chain: list[tuple[Any, str]] = []
-
-    try:
-        from pixora.config.settings import settings
-
-        if settings.gemini_api_key:
-            from pixora.providers.gemini_provider import GeminiProvider
-            chain.append((GeminiProvider(api_key=settings.gemini_api_key), "gemini"))
-
-        if settings.groq_api_key:
-            from pixora.providers.groq_provider import GroqProvider
-            chain.append((GroqProvider(api_key=settings.groq_api_key, model="llama-3.2-90b-vision-preview"), "groq_vision"))
-
-        if settings.replicate_api_token:
-            from pixora.providers.replicate_provider import ReplicateProvider
-            chain.append((ReplicateProvider(api_token=settings.replicate_api_token), "replicate"))
-
-        if settings.anthropic_api_key:
-            from pixora.providers.claude import ClaudeProvider
-            chain.append((ClaudeProvider(api_key=settings.anthropic_api_key), "claude"))
-
-    except Exception as exc:
-        logger.debug("vlm_harness: provider chain build error: %s", exc)
-
-    return chain
+    from pixora.providers.provider_chain import get_vlm_chain
+    return get_vlm_chain()
 
 
 # ── Confidence Estimation ─────────────────────────────────────

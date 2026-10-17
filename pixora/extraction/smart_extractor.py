@@ -82,26 +82,5 @@ async def smart_extract(
 
 
 def _get_best_provider():
-    try:
-        from pixora.config.settings import settings
-
-        if settings.gemini_api_key:
-            from pixora.providers.gemini_provider import GeminiProvider
-            return GeminiProvider(api_key=settings.gemini_api_key), "gemini"
-
-        if settings.groq_api_key:
-            from pixora.providers.groq_provider import GroqProvider
-            return GroqProvider(api_key=settings.groq_api_key), "groq"
-
-        if settings.together_api_key:
-            from pixora.providers.together_ai import TogetherAIProvider
-            return TogetherAIProvider(api_key=settings.together_api_key), "together"
-
-        if settings.anthropic_api_key:
-            from pixora.providers.claude import ClaudeProvider
-            return ClaudeProvider(api_key=settings.anthropic_api_key), "claude"
-
-    except Exception as exc:
-        logger.debug("smart_extractor: no provider available: %s", exc)
-
-    return None, "none"
+    from pixora.providers.provider_chain import get_best_provider
+    return get_best_provider()
