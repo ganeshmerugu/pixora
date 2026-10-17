@@ -305,19 +305,7 @@ async def _parallel_ocr(
     tasks = []
     engine_names: list[str] = []
 
-    # EasyOCR (always available)
-    try:
-        from pixora.ocr.easyocr_engine import EasyOCREngine
-
-        async def run_easyocr():
-            engine = EasyOCREngine()
-            return await engine.recognize(png_bytes)
-        tasks.append(run_easyocr())
-        engine_names.append("easyocr")
-    except ImportError:
-        pass
-
-    # Tesseract
+    # Tesseract (installed via apt on Render, lightweight)
     try:
         from pixora.ocr.tesseract import TesseractEngine
 
@@ -329,16 +317,16 @@ async def _parallel_ocr(
     except Exception:
         pass
 
-    # PaddleOCR
+    # EasyOCR (optional — heavy, needs PyTorch ~500MB)
     try:
-        from pixora.ocr.paddle_engine import PaddleOCREngine
+        from pixora.ocr.easyocr_engine import EasyOCREngine
 
-        async def run_paddle():
-            engine = PaddleOCREngine()
+        async def run_easyocr():
+            engine = EasyOCREngine()
             return await engine.recognize(png_bytes)
-        tasks.append(run_paddle())
-        engine_names.append("paddleocr")
-    except Exception:
+        tasks.append(run_easyocr())
+        engine_names.append("easyocr")
+    except ImportError:
         pass
 
     if not tasks:
