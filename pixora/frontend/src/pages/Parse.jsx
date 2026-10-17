@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { Upload, FileText, Play, Loader2, X, Eye, Code, AlertTriangle, ChevronRight, ZoomIn, ZoomOut, Download, ChevronLeft, BookOpen, History, Clock, Type, Braces, List, RotateCcw, Copy, Check } from 'lucide-react'
 import { api } from '../api'
 
@@ -138,6 +139,7 @@ function DocumentViewer({ pages, fieldBboxes, activeField, hoveredField, onField
 }
 
 export default function Playground() {
+  const location = useLocation()
   const [file, setFile] = useState(null)
   const [tier, setTier] = useState('agentic')
   const [processing, setProcessing] = useState(false)
@@ -152,6 +154,16 @@ export default function Playground() {
   const [history, setHistory] = useState([])
   const [mainTab, setMainTab] = useState('results')
   const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (location.state?.demoResult) {
+      setResult(location.state.demoResult)
+      setMainTab('results')
+      setRightTab('markdown')
+      if (location.state.demoFile) setFile(location.state.demoFile)
+      window.history.replaceState({}, '')
+    }
+  }, [])
 
   useEffect(() => {
     api.listParses().then(data => { if (Array.isArray(data)) setHistory(data.filter(j => j.status === 'completed').slice(0, 20)) }).catch(() => {})

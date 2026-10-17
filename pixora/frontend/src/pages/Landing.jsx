@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { FileText, Zap, Shield, Brain, BarChart3, Globe, CheckCircle, ArrowRight, ChevronDown, Sun, Moon, Upload, Eye, Lock, Cpu, Layers, GitBranch, Star, Users, FileCheck, ChevronRight, Play, X } from 'lucide-react'
 import { useTheme } from '../auth/ThemeContext'
 
@@ -113,6 +113,7 @@ export default function Landing() {
   const [plans, setPlans] = useState(null)
   const [currencies, setCurrencies] = useState([])
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false)
+  const navigate = useNavigate()
   const [demoFile, setDemoFile] = useState(null)
   const [demoResult, setDemoResult] = useState(null)
   const [demoLoading, setDemoLoading] = useState(false)
@@ -143,7 +144,11 @@ export default function Landing() {
       let data
       try { data = JSON.parse(text) } catch { data = { error: res.ok ? text : `Server error (${res.status}): ${text.slice(0, 100)}` } }
       if (!res.ok && !data.error) data = { error: data.detail || `Request failed (${res.status})` }
-      setDemoResult(data)
+      if (data.error) {
+        setDemoResult(data)
+      } else {
+        navigate('/parse', { state: { demoResult: { status: 'completed', ...data }, demoFile: file } })
+      }
     } catch (err) {
       setDemoResult({ error: err.message })
     } finally {
@@ -219,7 +224,12 @@ export default function Landing() {
           <p className="text-zinc-400 mt-2 text-sm">Drop any document and see structured extraction in seconds</p>
         </div>
         <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-8">
-          {!demoResult ? (
+          {demoResult?.error ? (
+            <div className="text-center space-y-3">
+              <p className="text-red-400 text-sm">{demoResult.error}</p>
+              <button onClick={() => { setDemoResult(null); setDemoFile(null) }} className="text-xs text-indigo-400 hover:text-indigo-300">Try again</button>
+            </div>
+          ) : (
             <label className={`block border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-all ${demoLoading ? 'border-indigo-500/50 bg-indigo-500/5' : 'border-zinc-700 hover:border-indigo-500/50 hover:bg-zinc-800/30'}`}>
               <input type="file" className="hidden" accept=".pdf,.png,.jpg,.jpeg,.tiff,.webp,.heic" onChange={e => handleDemo(e.target.files[0])} disabled={demoLoading} />
               {demoLoading ? (
@@ -236,45 +246,6 @@ export default function Landing() {
                 </div>
               )}
             </label>
-          ) : demoResult.error ? (
-            <div className="text-center space-y-3">
-              <p className="text-red-400 text-sm">{demoResult.error}</p>
-              <button onClick={() => { setDemoResult(null); setDemoFile(null) }} className="text-xs text-indigo-400 hover:text-indigo-300">Try again</button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <FileCheck className="text-emerald-400" size={20} />
-                  <div>
-                    <p className="text-sm font-medium">{demoFile?.name}</p>
-                    <p className="text-xs text-zinc-500">
-                      {demoResult.doc_type} — {Object.keys(demoResult.extraction || {}).filter(k => !k.startsWith('_')).length} fields extracted
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4 text-xs">
-                  {demoResult.quality_report?.quality_score != null && (
-                    <span className="text-emerald-400">{Math.round(demoResult.quality_report.quality_score * 100)}% quality</span>
-                  )}
-                  {demoResult.grounding_report?.grounding_rate != null && (
-                    <span className="text-sky-400">{Math.round(demoResult.grounding_report.grounding_rate * 100)}% grounded</span>
-                  )}
-                  <span className="text-zinc-500">{demoResult.latency_ms}ms</span>
-                </div>
-              </div>
-              <div className="bg-zinc-950 rounded-lg border border-zinc-800 p-4 max-h-64 overflow-y-auto">
-                <pre className="text-xs text-zinc-300 whitespace-pre-wrap font-mono">
-                  {JSON.stringify(demoResult.extraction, null, 2)}
-                </pre>
-              </div>
-              <div className="flex items-center justify-between">
-                <button onClick={() => { setDemoResult(null); setDemoFile(null) }} className="text-xs text-zinc-400 hover:text-zinc-200">Try another document</button>
-                <Link to="/signup" className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
-                  Get full features with free account <ChevronRight size={12} />
-                </Link>
-              </div>
-            </div>
           )}
         </div>
       </section>
