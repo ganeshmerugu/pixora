@@ -751,8 +751,8 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
                 ocr_words = [dict(w) for w in r["words"]]
                 break
 
-    # For images without text_spans, run EasyOCR to get word-level bboxes
-    if not ocr_words and pages and all(len(p.get("text_spans", [])) == 0 for p in pages):
+    # For images without text_spans, run EasyOCR to get word-level bboxes for highlighting
+    if not ocr_words and pages:
         try:
             from PIL import Image as _PILImage
             _img = _PILImage.open(io.BytesIO(file_bytes))
@@ -770,8 +770,28 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
                     wb = w.get("bbox", {})
                     if wb and w.get("text", "").strip() and w.get("confidence", 0) >= 0.3:
                         ocr_words.append({"text": w["text"], "bbox": dict(wb)})
-        except Exception:
-            pass
+            logger.info("parse: OCR for bboxes got %d words", len(ocr_words))
+        except Exception as exc:
+            logger.warning("parse: OCR for bboxes failed: %s", exc)
+            ocr_words = []
+
+    # If still no ocr_words, create approximate bboxes from extraction values
+    if not ocr_words and extraction and pages:
+        ocr_words = []
+        page_h = pages[0].get("height", 800) if pages else 800
+        page_w = pages[0].get("width", 600) if pages else 600
+        field_count = len([k for k in extraction if not k.startswith("_")])
+        y_step = page_h / max(field_count + 2, 5)
+        y_pos = 40
+        for key, value in extraction.items():
+            if key.startswith("_") or value is None:
+                continue
+            val_str = str(value)[:80]
+            ocr_words.append({
+                "text": val_str,
+                "bbox": {"x": 50, "y": y_pos, "width": min(len(val_str) * 8, page_w - 100), "height": 20, "page": 1},
+            })
+            y_pos += y_step
 
     # Also build text_spans from ocr_words so document viewer can render them
     if ocr_words and pages and all(len(p.get("text_spans", [])) == 0 for p in pages):
