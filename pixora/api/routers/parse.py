@@ -526,6 +526,8 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
                         "cached": False,
                         "tables": unified.get("tables", []),
                     }
+                    if unified.get("vlm_bboxes"):
+                        vlm_result["metadata"] = {"vlm_bboxes": unified["vlm_bboxes"]}
 
                 auditor.log_stage("unified_pipeline", detail=(
                     f"method={unified.get('method', '?')}, "
@@ -823,15 +825,23 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
         vlm_bboxes = vlm_result["metadata"]["vlm_bboxes"]
         for field_name, box in vlm_bboxes.items():
             if isinstance(box, dict) and "left" in box:
-                x = max(0, round(box["left"] * pw))
-                y = max(0, round(box["top"] * ph))
-                x2 = min(pw, round(box["right"] * pw))
-                y2 = min(ph, round(box["bottom"] * ph))
-                field_bboxes.append({
-                    "field": field_name, "x": x, "y": y,
-                    "width": x2 - x, "height": y2 - y,
-                    "page": 1, "confidence": 0.9,
-                })
+                if pw > 0 and ph > 0:
+                    x = max(0, round(box["left"] * pw))
+                    y = max(0, round(box["top"] * ph))
+                    x2 = min(pw, round(box["right"] * pw))
+                    y2 = min(ph, round(box["bottom"] * ph))
+                    field_bboxes.append({
+                        "field": field_name, "x": x, "y": y,
+                        "width": x2 - x, "height": y2 - y,
+                        "page": 1, "confidence": 0.9,
+                    })
+                else:
+                    field_bboxes.append({
+                        "field": field_name,
+                        "left": box["left"], "top": box["top"],
+                        "right": box["right"], "bottom": box["bottom"],
+                        "page": 1, "confidence": 0.9, "fractional": True,
+                    })
         if field_bboxes:
             auditor.log_stage("vlm_bbox", detail=f"located={len(field_bboxes)} from VLM response")
 

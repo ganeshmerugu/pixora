@@ -539,7 +539,10 @@ async def vlm_extract(
                     used_provider = provider_name
                     parsed = extract_json_object(content)
                     if parsed:
-                        all_extractions.append(parsed)
+                        if "fields" in parsed and isinstance(parsed["fields"], dict):
+                            all_extractions.append(parsed["fields"])
+                        else:
+                            all_extractions.append(parsed)
                     break
 
             if enable_markdown:

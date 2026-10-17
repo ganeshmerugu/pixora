@@ -42,6 +42,7 @@ class UnifiedResult(TypedDict, total=False):
     engines_used: list[str]
     preprocessing: list[str]
     quality_scores: dict[str, float]
+    vlm_bboxes: dict[str, dict]
 
 
 async def process_document(
@@ -373,8 +374,8 @@ Rules:
 1. Trust OCR for exact spellings of names, numbers, dates, IDs — don't hallucinate different characters
 2. Trust your VISUAL understanding for structure: which text is a label vs value, table boundaries, reading order
 3. If OCR text has obvious errors (rn→m, l→1, O→0), use what you SEE in the image
-4. Extract ALL fields as JSON with snake_case keys
-5. Names of people are VALUES, not keys
+4. Names of people are VALUES, not keys
+5. Include all visible fields: IDs, names, dates, numbers, addresses
 
 OCR-extracted text (may have structural errors):
 ---
@@ -382,6 +383,10 @@ OCR-extracted text (may have structural errors):
 ---
 
 Now look at the document image and extract structured data, using the OCR text above as your character-accuracy anchor.
+Return a JSON object with two keys:
+1. "fields": object where keys are field names in snake_case and values are the exact text
+2. "bboxes": object where keys are the SAME field names and values are {{"left": 0.xx, "top": 0.xx, "right": 0.xx, "bottom": 0.xx}} as fractions (0-1) of the image width/height
+
 Return ONLY valid JSON."""
 
 TABLE_REGION_PROMPT = """Extract this table from the document image. Output as a markdown table.
@@ -424,6 +429,14 @@ async def _vlm_enrich(
             if content.strip():
                 parsed = extract_json_object(content)
                 if parsed and any(k for k in parsed if not k.startswith("_")):
+                    # Unpack {"fields": {...}, "bboxes": {...}} wrapper from VLM
+                    vlm_bboxes = {}
+                    if "fields" in parsed and isinstance(parsed["fields"], dict):
+                        vlm_bboxes = parsed.pop("bboxes", {}) if isinstance(parsed.get("bboxes"), dict) else {}
+                        parsed = parsed["fields"]
+                    elif "bboxes" in parsed and isinstance(parsed["bboxes"], dict):
+                        vlm_bboxes = parsed.pop("bboxes")
+
                     # Pattern #4: Verify — cross-check VLM output against OCR text
                     if ocr_text:
                         parsed = _verify_against_ocr(parsed, ocr_text)
@@ -431,7 +444,7 @@ async def _vlm_enrich(
                     from pixora.ocr.vlm_harness import estimate_extraction_confidence
                     confidence = estimate_extraction_confidence(parsed)
 
-                    return {
+                    result = {
                         "extraction": parsed,
                         "markdown": content if not parsed else "",
                         "confidence": confidence,
@@ -439,6 +452,9 @@ async def _vlm_enrich(
                         "cost_usd": cost,
                         "ocr_grounded": bool(ocr_text),
                     }
+                    if vlm_bboxes:
+                        result["vlm_bboxes"] = vlm_bboxes
+                    return result
                 elif len(content) > 50:
                     return {
                         "extraction": {},
@@ -545,7 +561,7 @@ def _merge_ocr_vlm(ocr_text: str, ocr_quality: float, vlm_result: dict) -> Unifi
     elif not vlm_extraction:
         method = "ocr_only"
 
-    return UnifiedResult(
+    result = UnifiedResult(
         text=best_text,
         markdown=best_markdown,
         extraction=extraction,
@@ -565,3 +581,6 @@ def _merge_ocr_vlm(ocr_text: str, ocr_quality: float, vlm_result: dict) -> Unifi
             "final": round(final_conf, 4),
         },
     )
+    if vlm_result.get("vlm_bboxes"):
+        result["vlm_bboxes"] = vlm_result["vlm_bboxes"]
+    return result
