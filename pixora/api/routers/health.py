@@ -20,6 +20,7 @@ async def health_check():
     providers = {
         "tesseract": True,
         "gemini_vlm": bool(settings.gemini_api_key),
+        "jev": bool(settings.typesafe_api_key),
         "groq": bool(settings.groq_api_key),
         "together_ai": bool(settings.together_api_key),
         "replicate": bool(settings.replicate_api_token),
