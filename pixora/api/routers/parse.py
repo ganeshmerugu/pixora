@@ -809,7 +809,16 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
                     })
             p["text_spans"] = spans
 
-    field_bboxes = compute_field_bboxes(extraction, pages, ocr_words)
+    # Map VLM fields to OCR word positions (fuzzy matching)
+    try:
+        from pixora.ocr.bbox_mapper import map_fields_to_bboxes
+        pw = pages[0].get("width", 0) if pages else 0
+        ph = pages[0].get("height", 0) if pages else 0
+        field_bboxes = map_fields_to_bboxes(extraction, ocr_words or [], pw, ph)
+    except Exception:
+        field_bboxes = []
+    if not field_bboxes:
+        field_bboxes = compute_field_bboxes(extraction, pages, ocr_words)
 
     elapsed = int((time.monotonic() - start) * 1000)
 
