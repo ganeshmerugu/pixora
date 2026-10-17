@@ -490,6 +490,7 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
 
     vlm_result = None
     vlm_error = ""
+    doc_type = ""
     if not has_text and is_image_format:
         # Strategy 1: VLM-first (Gemini free, best quality for images)
         try:
