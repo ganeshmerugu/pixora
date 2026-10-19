@@ -214,20 +214,49 @@ def preprocess_for_vlm(image_bytes: bytes) -> tuple[bytes, list[str]]:
             import cv2
             arr = np.array(img)
 
-            # 4. Deskew
+            # 4. Image quality assessment (BRISQUE-lite: Laplacian variance)
+            gray_q = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY) if len(arr.shape) == 3 else arr
+            laplacian_var = cv2.Laplacian(gray_q, cv2.CV_64F).var()
+            is_blurry = laplacian_var < 100
+            is_noisy = laplacian_var > 5000
+            applied.append(f"quality_lap={laplacian_var:.0f}")
+
+            # 5. Perspective correction (for photographed docs at angle)
+            arr, persp = _correct_perspective(arr)
+            if persp:
+                applied.append("perspective")
+
+            # 6. Deskew
             arr, angle = _deskew(arr)
             if abs(angle) > 0.5:
                 applied.append(f"deskew_{angle:.1f}")
 
-            # 5. Shadow removal
+            # 7. Shadow removal
             arr = _remove_shadows(arr)
             applied.append("deshadow")
 
-            # 6. Denoise — skip NLM (too slow ~200ms). Bilateral filter is faster.
-            arr = cv2.bilateralFilter(arr, 5, 50, 50)
-            applied.append("denoise")
+            # 8. Adaptive denoise based on quality assessment
+            if is_noisy:
+                arr = cv2.bilateralFilter(arr, 9, 75, 75)
+                applied.append("denoise_heavy")
+            elif is_blurry:
+                applied.append("denoise_skip_blurry")
+            else:
+                arr = cv2.bilateralFilter(arr, 5, 50, 50)
+                applied.append("denoise")
 
-            # 7. CLAHE contrast
+            # 9. Adaptive binarization check (Sauvola-style for mixed lighting)
+            gray_b = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY) if len(arr.shape) == 3 else arr
+            std_dev = gray_b.std()
+            if std_dev < 40:
+                thresh = cv2.adaptiveThreshold(
+                    gray_b, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY, 25, 12
+                )
+                arr = cv2.cvtColor(thresh, cv2.COLOR_GRAY2RGB) if len(arr.shape) == 3 else thresh
+                applied.append("adaptive_binarize")
+
+            # 10. CLAHE contrast
             if len(arr.shape) == 3:
                 lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
                 clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
@@ -237,12 +266,21 @@ def preprocess_for_vlm(image_bytes: bytes) -> tuple[bytes, list[str]]:
                 arr = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(arr)
             applied.append("clahe")
 
-            # 8. Unsharp mask (gentler than kernel sharpen — preserves thin strokes)
-            blurred = cv2.GaussianBlur(arr, (0, 0), 3)
-            arr = cv2.addWeighted(arr, 1.5, blurred, -0.5, 0)
-            applied.append("sharpen")
+            # 11. Adaptive sharpen (stronger for blurry, skip for noisy)
+            if is_blurry:
+                blurred = cv2.GaussianBlur(arr, (0, 0), 2)
+                arr = cv2.addWeighted(arr, 2.0, blurred, -1.0, 0)
+                applied.append("sharpen_strong")
+            elif not is_noisy:
+                blurred = cv2.GaussianBlur(arr, (0, 0), 3)
+                arr = cv2.addWeighted(arr, 1.5, blurred, -0.5, 0)
+                applied.append("sharpen")
 
-            # 9. Border removal
+            # 12. Watermark suppression (detect and fade repeating light patterns)
+            arr = _suppress_watermark(arr)
+            applied.append("watermark_check")
+
+            # 13. Border removal
             arr, trimmed = _remove_borders(arr)
             if trimmed:
                 applied.append("deborder")
@@ -332,6 +370,57 @@ def _remove_shadows(arr):
             return cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8UC1)
     except Exception:
         return arr
+
+
+def _correct_perspective(arr):
+    import cv2, numpy as np
+    try:
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY) if len(arr.shape) == 3 else arr
+        edges = cv2.Canny(gray, 50, 150)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return arr, False
+        largest = max(contours, key=cv2.contourArea)
+        h, w = arr.shape[:2]
+        if cv2.contourArea(largest) < (h * w * 0.3):
+            return arr, False
+        peri = cv2.arcLength(largest, True)
+        approx = cv2.approxPolyDP(largest, 0.02 * peri, True)
+        if len(approx) != 4:
+            return arr, False
+        pts = approx.reshape(4, 2).astype(np.float32)
+        s = pts.sum(axis=1)
+        d = np.diff(pts, axis=1).ravel()
+        tl, br = pts[np.argmin(s)], pts[np.argmax(s)]
+        tr, bl = pts[np.argmin(d)], pts[np.argmax(d)]
+        src = np.array([tl, tr, br, bl], dtype=np.float32)
+        w_new = max(int(np.linalg.norm(tr - tl)), int(np.linalg.norm(br - bl)))
+        h_new = max(int(np.linalg.norm(bl - tl)), int(np.linalg.norm(br - tr)))
+        dst = np.array([[0, 0], [w_new, 0], [w_new, h_new], [0, h_new]], dtype=np.float32)
+        M = cv2.getPerspectiveTransform(src, dst)
+        warped = cv2.warpPerspective(arr, M, (w_new, h_new))
+        return warped, True
+    except Exception:
+        return arr, False
+
+
+def _suppress_watermark(arr):
+    import cv2, numpy as np
+    try:
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY) if len(arr.shape) == 3 else arr
+        light_mask = gray > 200
+        light_ratio = light_mask.sum() / gray.size
+        if 0.05 < light_ratio < 0.4:
+            if len(arr.shape) == 3:
+                for c in range(3):
+                    channel = arr[:, :, c]
+                    channel[light_mask & (channel > 180)] = 255
+                    arr[:, :, c] = channel
+            else:
+                arr[light_mask & (arr > 180)] = 255
+    except Exception:
+        pass
+    return arr
 
 
 def _remove_borders(arr):
