@@ -56,13 +56,24 @@ class TesseractEngine(OCREngine):
             logger.error("tesseract: failed to open image: %s", exc)
             return []
 
+        # OSD: detect orientation and script before OCR
+        image = self._fix_orientation(image)
+
         lang = "+".join(languages) if languages else "eng"
-        data = pytesseract.image_to_data(image, lang=lang, output_type=pytesseract.Output.DICT)
+
+        # Use --psm 3 (auto page segmentation) for better multi-column handling
+        custom_config = r"--psm 3 --oem 1"
+        data = pytesseract.image_to_data(
+            image, lang=lang, output_type=pytesseract.Output.DICT,
+            config=custom_config,
+        )
 
         words: list[RecognizedWord] = []
         full_text_parts: list[str] = []
         confidences: list[float] = []
 
+        # Group by block_num for reading order (multi-column aware)
+        blocks: dict[int, list[tuple[int, str, float, dict]]] = {}
         n = len(data.get("text", []))
         for i in range(n):
             text = str(data["text"][i]).strip()
@@ -73,20 +84,36 @@ class TesseractEngine(OCREngine):
             if not text or conf < 0:
                 continue
 
-            norm_conf = conf / 100.0
-            words.append(RecognizedWord(
-                text=text,
-                confidence=norm_conf,
-                bbox=BoundingBox(
-                    x=float(data["left"][i]),
-                    y=float(data["top"][i]),
-                    width=float(data["width"][i]),
-                    height=float(data["height"][i]),
-                    page=page_number,
-                ),
-            ))
-            full_text_parts.append(text)
-            confidences.append(norm_conf)
+            block_num = data.get("block_num", [0] * n)[i]
+            if block_num not in blocks:
+                blocks[block_num] = []
+            blocks[block_num].append((i, text, conf, {
+                "left": data["left"][i], "top": data["top"][i],
+                "width": data["width"][i], "height": data["height"][i],
+            }))
+
+        # Sort blocks by vertical position then horizontal (reading order)
+        sorted_blocks = sorted(blocks.items(), key=lambda b: (
+            min(item[3]["top"] for item in b[1]),
+            min(item[3]["left"] for item in b[1]),
+        ))
+
+        for _block_num, items in sorted_blocks:
+            for _idx, text, conf, bbox_data in items:
+                norm_conf = conf / 100.0
+                words.append(RecognizedWord(
+                    text=text,
+                    confidence=norm_conf,
+                    bbox=BoundingBox(
+                        x=float(bbox_data["left"]),
+                        y=float(bbox_data["top"]),
+                        width=float(bbox_data["width"]),
+                        height=float(bbox_data["height"]),
+                        page=page_number,
+                    ),
+                ))
+                full_text_parts.append(text)
+                confidences.append(norm_conf)
 
         avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
 
@@ -97,3 +124,15 @@ class TesseractEngine(OCREngine):
             words=words,
             engine="tesseract",
         )]
+
+    @staticmethod
+    def _fix_orientation(image: Image.Image) -> Image.Image:
+        try:
+            osd = pytesseract.image_to_osd(image, output_type=pytesseract.Output.DICT)
+            rotation = osd.get("rotate", 0)
+            if rotation and rotation != 0:
+                image = image.rotate(-rotation, expand=True)
+                logger.debug("tesseract: OSD rotated image by %d degrees", rotation)
+        except Exception:
+            pass
+        return image

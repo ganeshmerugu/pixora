@@ -133,6 +133,16 @@ DOMAIN_PROMPTS: dict[str, str] = {
         "date_of_loss, coverage_type, deductible, claim_amount,\n"
         "adjuster, status. Extract exact values as shown." + _BBOX_SUFFIX
     ),
+    "handwritten": (
+        "This document contains handwritten text. Extract ALL handwritten and printed content.\n"
+        "Pay special attention to:\n"
+        "- Handwritten names, dates, signatures, amounts\n"
+        "- Form fields where someone wrote in values by hand\n"
+        "- Printed labels paired with handwritten values\n"
+        "- Crossed-out text (note as '[crossed out: original text]')\n"
+        "- Unclear handwriting (provide best guess with '?' suffix)\n"
+        "For each field, note if the value is handwritten vs printed." + _BBOX_SUFFIX
+    ),
     "bank_statement": (
         "Extract ALL fields from this bank statement. Include:\n"
         "bank_name, account_number, account_holder, statement_period,\n"

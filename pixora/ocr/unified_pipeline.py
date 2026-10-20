@@ -64,10 +64,16 @@ async def process_document(
     # ══════════════════════════════════════════════════════════
     if is_pdf:
         text, md, pdf_method = await _extract_pdf_text(file_bytes)
+        tables_md = _extract_pdf_tables(file_bytes)
         if text and len(text.strip()) > 30:
             engines_used.append(pdf_method)
             from pixora.ocr.smart_pipeline import estimate_text_quality
             quality = estimate_text_quality(text)
+
+            # Append tables to markdown if found
+            if tables_md:
+                md = (md or text) + "\n\n" + "\n\n".join(tables_md)
+                engines_used.append("pdfplumber_tables")
 
             if quality >= 0.6 or not enable_vlm:
                 return UnifiedResult(
@@ -76,6 +82,7 @@ async def process_document(
                     final_confidence=quality, cost_usd=0.0,
                     latency_ms=round((time.monotonic() - start) * 1000, 1),
                     engines_used=engines_used,
+                    tables=tables_md,
                     quality_scores={"text_quality": quality},
                 )
 
@@ -138,8 +145,14 @@ async def process_document(
             quality_scores={"ocr_quality": ocr_quality},
         )
 
-    # Step 5: OCR-grounded VLM (feeds OCR text as character anchor)
-    vlm_result = await _vlm_enrich(file_bytes, filename, doc_type, ocr_text)
+    # Step 5: Detect handwriting — lower OCR confidence indicates non-printed text
+    has_handwriting = ocr_confidence < 0.5 and ocr_quality < 0.4
+    vlm_doc_type = doc_type
+    if has_handwriting and not doc_type:
+        vlm_doc_type = "handwritten"
+
+    # Step 6: OCR-grounded VLM (feeds OCR text as character anchor)
+    vlm_result = await _vlm_enrich(file_bytes, filename, vlm_doc_type, ocr_text)
 
     if not vlm_result or not vlm_result.get("extraction"):
         return UnifiedResult(
@@ -247,6 +260,32 @@ async def _extract_pdf_text(file_bytes: bytes) -> tuple[str, str, str]:
         pass
 
     return "", "", "none"
+
+
+# ── PDF Table Extraction ──────────────────────────────────────
+
+def _extract_pdf_tables(file_bytes: bytes) -> list[str]:
+    tables_md: list[str] = []
+    try:
+        import pdfplumber
+        pdf = pdfplumber.open(io.BytesIO(file_bytes))
+        for page in pdf.pages[:10]:
+            for table in (page.extract_tables() or []):
+                if not table or not table[0]:
+                    continue
+                headers = [str(c or "").strip() for c in table[0]]
+                if not any(headers):
+                    continue
+                md_lines = ["| " + " | ".join(headers) + " |"]
+                md_lines.append("| " + " | ".join("---" for _ in headers) + " |")
+                for row in table[1:]:
+                    cells = [str(c or "").strip() for c in row]
+                    md_lines.append("| " + " | ".join(cells) + " |")
+                tables_md.append("\n".join(md_lines))
+        pdf.close()
+    except Exception as exc:
+        logger.debug("unified_pipeline: table extraction failed: %s", exc)
+    return tables_md
 
 
 # ── Image Preprocessing ───────────────────────────────────────

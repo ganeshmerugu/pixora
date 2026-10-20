@@ -704,6 +704,24 @@ async def _run_pipeline(file_bytes: bytes, filename: str, doc_id: str, tier: str
             auditor.log_stage("self_heal", detail=f"round={heal_round}, action=escalate_to_agentic")
             continue
 
+        # Heal strategy 3: if LLM still low, escalate to VLM (look at the actual image)
+        if quality < 0.5 and file_bytes and engine_used != "vlm":
+            try:
+                from pixora.providers.provider_chain import has_vlm
+                if has_vlm():
+                    from pixora.ocr.unified_pipeline import _vlm_enrich
+                    vlm_heal = await _vlm_enrich(file_bytes, filename, doc_type, all_text[:4000])
+                    if vlm_heal and vlm_heal.get("extraction"):
+                        vlm_ext = vlm_heal["extraction"]
+                        if any(k for k in vlm_ext if not k.startswith("_")):
+                            extraction_result = _post_process_extraction(vlm_ext)
+                            engine_used = f"vlm_heal_{vlm_heal.get('provider', '?')}"
+                            auditor.log_stage("self_heal", detail=f"round={heal_round}, action=vlm_escalation, fields={len(vlm_ext)}")
+                            state["extraction_result"] = extraction_result
+                            continue
+            except Exception as exc:
+                logger.debug("parse: VLM heal escalation failed: %s", exc)
+
         break
 
     state["correction_round"] = heal_round
