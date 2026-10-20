@@ -15,6 +15,16 @@ opencv-python-headless>=4.8
 # EasyOCR commented out — loads 500MB PyTorch, crashes Render free tier (512MB RAM)
 # Uncomment for local dev or paid tier: easyocr>=1.7
 
+# Surya OCR — best multilingual, needs PyTorch (~500MB). Enable on 1GB+ instances.
+# surya-ocr>=0.9
+
+# marker — best PDF→markdown converter, uses Surya internally. Enable on 1GB+ instances.
+# marker-pdf>=1.0
+
+# PaddleOCR — best for forms/tables/IDs, lighter than PyTorch. Enable on 1GB+ instances.
+# paddleocr>=2.9
+# paddlepaddle>=2.6
+
 # Text processing
 python-Levenshtein>=0.25.0
 numpy>=1.24

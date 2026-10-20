@@ -1,10 +1,10 @@
 """Single provider chain — one place to resolve VLM/LLM providers.
 
 Two chains:
-  - VLM chain: providers that can see images (Gemini, Replicate, Claude)
-  - LLM chain: providers that process text only (Groq, Together, Claude)
+  - VLM chain: providers that can see images (Gemini, Groq Qwen3.8-27B, Replicate, Claude)
+  - LLM chain: providers that process text (Gemini, Groq, Claude)
 
-Groq does NOT support vision — it's LLM-only for text extraction.
+Groq Qwen3.8-27B supports vision input — used as VLM fallback when Gemini is rate-limited.
 """
 from __future__ import annotations
 import logging
@@ -29,6 +29,11 @@ def get_vlm_chain() -> list[tuple[Any, str]]:
         if settings.gemini_api_key:
             from pixora.providers.gemini_provider import GeminiProvider
             chain.append((GeminiProvider(api_key=settings.gemini_api_key), "gemini"))
+
+        # Groq Qwen3.8-27B supports image input — free VLM fallback
+        if settings.groq_api_key:
+            from pixora.providers.groq_provider import GroqProvider
+            chain.append((GroqProvider(api_key=settings.groq_api_key, model="qwen/qwen3.8-27b"), "groq_vision"))
 
         if settings.replicate_api_token:
             from pixora.providers.replicate_provider import ReplicateProvider

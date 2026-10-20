@@ -220,7 +220,28 @@ async def process_document(
 # ── PDF Text Extraction (free, fast) ─────────────────────────
 
 async def _extract_pdf_text(file_bytes: bytes) -> tuple[str, str, str]:
-    # Try docling first (best markdown)
+    # Try marker first (best PDF→markdown, preserves formatting/tables/layout)
+    try:
+        from marker.converters.pdf import PdfConverter
+        from marker.models import create_model_dict
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(file_bytes)
+            tmp_path = f.name
+        try:
+            converter = PdfConverter(artifact_dict=create_model_dict())
+            rendered = converter(tmp_path)
+            md = rendered.markdown
+            if md and len(md.strip()) > 30:
+                return md, md, "marker"
+        finally:
+            os.unlink(tmp_path)
+    except ImportError:
+        pass
+    except Exception as exc:
+        logger.debug("unified_pipeline: marker failed: %s", exc)
+
+    # Try docling (good markdown)
     try:
         from pixora.extraction.docling_engine import extract_with_docling
         result = extract_with_docling(file_bytes, "document.pdf")
@@ -356,15 +377,15 @@ async def _parallel_ocr(
     except Exception:
         pass
 
-    # EasyOCR (optional — heavy, needs PyTorch ~500MB)
+    # Surya (best multilingual OCR — needs PyTorch, skip if not installed)
     try:
-        from pixora.ocr.easyocr_engine import EasyOCREngine
+        from pixora.ocr.surya_engine import SuryaEngine
 
-        async def run_easyocr():
-            engine = EasyOCREngine()
+        async def run_surya():
+            engine = SuryaEngine()
             return await engine.recognize(png_bytes)
-        tasks.append(run_easyocr())
-        engine_names.append("easyocr")
+        tasks.append(run_surya())
+        engine_names.append("surya")
     except ImportError:
         pass
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import base64
 import logging
 import time
 from typing import Any
@@ -18,7 +19,10 @@ GROQ_PRICING: dict[str, tuple[float, float]] = {
     "llama-3.1-8b-instant": (0.05, 0.08),
     "mixtral-8x7b-32768": (0.24, 0.24),
     "gemma2-9b-it": (0.20, 0.20),
+    "qwen/qwen3.8-27b": (0.80, 4.00),
 }
+
+VISION_MODEL = "qwen/qwen3.8-27b"
 
 
 class GroqProvider:
@@ -27,8 +31,8 @@ class GroqProvider:
     def __init__(
         self,
         api_key: str = "",
-        model: str = "llama-3.3-70b-versatile",
-        timeout: float = 30.0,
+        model: str = "qwen/qwen3.8-27b",
+        timeout: float = 60.0,
     ):
         if not HAS_HTTPX:
             raise ImportError("httpx required: pip install httpx")
@@ -82,7 +86,7 @@ class GroqProvider:
         completion_tokens = usage.get("completion_tokens", 0)
         total_tokens = prompt_tokens + completion_tokens
 
-        pricing = GROQ_PRICING.get(self._model, (0.59, 0.79))
+        pricing = GROQ_PRICING.get(self._model, (0.80, 4.00))
         cost = (prompt_tokens * pricing[0] + completion_tokens * pricing[1]) / 1_000_000
         latency_ms = int((time.monotonic() - start) * 1000)
 
@@ -98,6 +102,61 @@ class GroqProvider:
             "latency_ms": latency_ms,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
+        }
+
+    async def analyze_image(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        max_tokens: int = 4096,
+        temperature: float = 0.0,
+    ) -> dict[str, Any]:
+        start = time.monotonic()
+        b64 = base64.b64encode(image_bytes).decode()
+
+        messages = [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            {"type": "text", "text": prompt},
+        ]}]
+
+        payload: dict[str, Any] = {
+            "model": VISION_MODEL,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+
+        resp = await self._client.post(
+            GROQ_API_URL,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        content = data["choices"][0]["message"]["content"]
+        usage = data.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        total_tokens = prompt_tokens + completion_tokens
+
+        pricing = GROQ_PRICING.get(VISION_MODEL, (0.80, 4.00))
+        cost = (prompt_tokens * pricing[0] + completion_tokens * pricing[1]) / 1_000_000
+        latency_ms = int((time.monotonic() - start) * 1000)
+
+        self._total_cost += cost
+        self._total_tokens += total_tokens
+        self._total_requests += 1
+
+        return {
+            "content": content,
+            "tokens_used": total_tokens,
+            "cost_usd": round(cost, 6),
+            "model": VISION_MODEL,
+            "latency_ms": latency_ms,
         }
 
     def estimate_tokens(self, text: str) -> int:
