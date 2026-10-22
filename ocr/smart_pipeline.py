@@ -306,7 +306,7 @@ def _get_vlm_provider(explicit_provider: Any = None):
         from pixora.config.settings import settings
 
         # Vertex AI Gemini — preferred on GCP (uses IAM auth, no API key needed)
-        if getattr(settings, "deployment_mode", "") == "serverless" or os.environ.get("K_SERVICE"):
+        if os.environ.get("GCLOUD_PROJECT") or os.environ.get("K_SERVICE") or getattr(settings, "deployment_mode", "") == "serverless":
             try:
                 from pixora.providers.vertex_ai import VertexAIProvider
                 provider = VertexAIProvider(
@@ -347,7 +347,7 @@ async def vlm_extract(
     provider, provider_name = _get_vlm_provider(provider)
 
     if not provider:
-        logger.info("smart_pipeline: no VLM provider configured — set PIXORA_GEMINI_API_KEY (free) or PIXORA_GROQ_API_KEY")
+        logger.info("smart_pipeline: no VLM provider configured — check Vertex AI (GCLOUD_PROJECT) or set PIXORA_GEMINI_API_KEY")
         return "", 0.0
 
     if not prompt:
