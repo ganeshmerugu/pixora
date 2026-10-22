@@ -1,0 +1,58 @@
+resources:
+  files:
+    methods:
+      create: post /api/v1/files
+      list: get /api/v1/files
+      retrieve: get /api/v1/files/{id}
+      delete: delete /api/v1/files/{id}
+      content: get /api/v1/files/{id}/content
+
+  parsing:
+    methods:
+      parse: post /api/v1/parse
+      retrieve: get /api/v1/parse/{job_id}
+      list: get /api/v1/parse
+      cancel: post /api/v1/parse/{job_id}/cancel
+      delete: delete /api/v1/parse/{job_id}
+    subresources:
+      quality:
+        methods:
+          get_quality: get /api/v1/parse/{job_id}/quality
+          get_grounding: get /api/v1/parse/{job_id}/grounding
+          get_trace: get /api/v1/parse/{job_id}/trace
+          get_cost: get /api/v1/parse/{job_id}/cost
+
+  extract:
+    methods:
+      run: post /api/v1/extract
+      retrieve: get /api/v1/extract/{job_id}
+      list: get /api/v1/extract
+      cancel: post /api/v1/extract/{job_id}/cancel
+      delete: delete /api/v1/extract/{job_id}
+      generate_schema: post /api/v1/extract/generate-schema
+      validate_schema: post /api/v1/extract/validate-schema
+
+  classify:
+    methods:
+      classify: post /api/v1/classify
+      retrieve: get /api/v1/classify/{job_id}
+      list: get /api/v1/classify
+
+  schemas:
+    methods:
+      create: post /api/v1/schemas
+      list: get /api/v1/schemas
+      retrieve: get /api/v1/schemas/{id}
+      update: put /api/v1/schemas/{id}
+      delete: delete /api/v1/schemas/{id}
+      infer: post /api/v1/schemas/infer
+
+  review:
+    methods:
+      queue: get /api/v1/review/queue
+      retrieve: get /api/v1/review/{doc_id}
+      submit: post /api/v1/review/{doc_id}
+
+settings:
+  pagination: cursor
+  package_name: docforge

@@ -1,0 +1,9 @@
+{
+  "project": "pixora",
+  "spec": "../openapi.json",
+  "outputs": {
+    "python": "../sdks/pixora-python",
+    "typescript": "../sdks/pixora-typescript",
+    "go": "../sdks/pixora-go"
+  }
+}
