@@ -19,6 +19,7 @@ class Region(TypedDict, total=False):
     confidence: float
     children: list["Region"]
     reading_order: int
+    semantic_type: str
     metadata: dict[str, Any]
 
 

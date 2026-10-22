@@ -1,14 +1,22 @@
 from __future__ import annotations
 import time
 from typing import Any
-import anthropic
-from docforge.providers.base import LLMResponse, VisionResponse, ClassificationResult, EmbeddingResult
+from pixora.providers.base import LLMResponse, VisionResponse, ClassificationResult, EmbeddingResult
+
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    anthropic = None  # type: ignore[assignment]
+    HAS_ANTHROPIC = False
 
 
 class ClaudeProvider:
     provider_name = "claude"
 
     def __init__(self, api_key: str | None = None, model: str = "claude-3-5-sonnet-20241022") -> None:
+        if not HAS_ANTHROPIC:
+            raise ImportError("anthropic package not installed. Install with: pip install anthropic")
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
 

@@ -1,14 +1,45 @@
-FROM python:3.11-slim
+# ── Stage 1: Builder ──────────────────────────────────────────
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
+    && pip install --no-cache-dir --prefix=/install gunicorn uvloop httptools
+
+# ── Stage 2: Runtime ─────────────────────────────────────────
+FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
-    libgl1-mesa-glx \
+    tesseract-ocr-eng \
+    libgl1 \
     libglib2.0-0 \
+    poppler-utils \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-COPY pyproject.toml .
-RUN pip install --no-cache-dir .
-COPY . .
+COPY --from=builder /install /usr/local
 
-CMD ["uvicorn", "docforge.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+RUN useradd --create-home --shell /bin/bash pixora
+WORKDIR /app
+
+COPY pixora/ ./pixora/
+COPY run.py .
+COPY requirements.txt .
+
+RUN chown -R pixora:pixora /app
+USER pixora
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIXORA_ENV=production \
+    PORT=8080
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/api/v1/health || exit 1
+
+CMD exec gunicorn pixora.api.main:app \
+    --config pixora/gunicorn.conf.py \
+    --bind 0.0.0.0:${PORT}

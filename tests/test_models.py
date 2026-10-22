@@ -1,10 +1,10 @@
 from __future__ import annotations
 import pytest
-from docforge.models.document import BoundingBox, Region, Page, DocumentTree
-from docforge.models.pipeline import PipelineState, ProcessingPlan, CorrectionDelta, DocumentProfile
-from docforge.models.ontology import OntologyNode, ExtractionSchema, ValidationRule
-from docforge.models.quality import QualityIssue, ParseQualityReport
-from docforge.models.registry import ModelRegistry
+from pixora.models.document import BoundingBox, Region, Page, DocumentTree
+from pixora.models.pipeline import PipelineState, ProcessingPlan, CorrectionDelta, DocumentProfile
+from pixora.models.ontology import OntologyNode, ExtractionSchema, ValidationRule
+from pixora.models.quality import QualityIssue, ParseQualityReport
+from pixora.models.registry import ModelRegistry
 
 def test_region_required_fields():
     r = Region(id="r1", type="TEXT", content="hello")

@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.env
+*.db
+node_modules/
+frontend/node_modules/
+.stainless/
+data/
+*.cache
+.claude/

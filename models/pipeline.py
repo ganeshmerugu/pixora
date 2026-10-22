@@ -6,12 +6,13 @@ from typing_extensions import Required, TypedDict
 class DocumentProfile(TypedDict, total=False):
     doc_type: Required[str]
     confidence: Required[float]
-    complexity: str
+    complexity: float
     languages: list[str]
     has_tables: bool
     has_handwriting: bool
     has_images: bool
     is_scanned: bool
+    text_layer_present: bool
     page_count: int
     recommended_strategy: str
     metadata: dict[str, Any]
@@ -20,6 +21,8 @@ class DocumentProfile(TypedDict, total=False):
 class ProcessingPlan(TypedDict, total=False):
     ocr_strategy: Required[str]
     extraction_mode: Required[str]
+    max_correction_rounds: int
+    target_quality: float
     deskew: bool
     denoise: bool
     enhance_contrast: bool
@@ -46,10 +49,10 @@ class PipelineState(TypedDict, total=False):
     source_filename: str
     profile: DocumentProfile
     processing_plan: ProcessingPlan
-    document_tree: Any  # DocumentTree — avoid circular import at runtime
-    extraction_schema: Any  # ExtractionSchema
+    document_tree: Any
+    extraction_schema: Any
     extraction_result: dict[str, Any]
-    quality_report: Any  # ParseQualityReport
+    quality_report: Any
     current_stage: str
     correction_rounds: int
     correction_round: CorrectionDelta

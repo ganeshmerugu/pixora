@@ -1,7 +1,7 @@
 from __future__ import annotations
 import pytest
-from docforge.providers.base import LLMProvider, VisionProvider, ClassificationProvider, LLMResponse, VisionResponse, ClassificationResult
-from docforge.providers.registry import ProviderRegistry
+from pixora.providers.base import LLMProvider, VisionProvider, ClassificationProvider, LLMResponse, VisionResponse, ClassificationResult
+from pixora.providers.registry import ProviderRegistry
 
 
 def test_registry_register_and_get():

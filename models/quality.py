@@ -11,6 +11,13 @@ class QualityIssue(TypedDict, total=False):
     region_id: str
 
 
+class FieldConfidence(TypedDict, total=False):
+    field: Required[str]
+    parsing_confidence: Required[float]
+    extraction_confidence: Required[float]
+    overall: Required[float]
+
+
 class ParseQualityReport(TypedDict, total=False):
     document_id: Required[str]
     overall_score: Required[float]
@@ -22,4 +29,5 @@ class ParseQualityReport(TypedDict, total=False):
     processing_time_ms: int
     issues: list[QualityIssue]
     recommendation: str
+    field_confidences: list[FieldConfidence]
     metadata: dict[str, Any]
